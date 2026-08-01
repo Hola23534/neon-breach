@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NEON BREACH</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="crosshair"></div>
+
+  <div id="hud">
+    <div id="healthWrap">
+      <div id="healthLabel">HP</div>
+      <div id="healthBar"><div id="healthFill"></div></div>
+    </div>
+    <div id="ammoWrap">
+      <span id="ammo">30</span> / <span id="ammoReserve">90</span>
+    </div>
+    <div id="scoreWrap">SCORE <span id="score">0</span></div>
+    <div id="waveWrap">WAVE <span id="wave">1</span></div>
+  </div>
+
+  <div id="hitFlash"></div>
+  <div id="lowHealthVignette"></div>
+
+  <div id="startScreen" class="overlay">
+    <h1 id="startTitle">NEON BREACH</h1>
+    <p class="subtitle">Sobrevive a las oleadas. No dejes que te alcancen.</p>
+    <div class="controls">
+      <div><b>WASD</b> Moverse</div>
+      <div><b>RATÓN</b> Apuntar</div>
+      <div><b>CLICK</b> Disparar</div>
+      <div><b>R</b> Recargar</div>
+      <div><b>SHIFT</b> Sprint</div>
+      <div><b>ESPACIO</b> Saltar</div>
+    </div>
+    <button id="startBtn">CLICK PARA JUGAR</button>
+    <p id="startHint" class="hint"></p>
+  </div>
+
+  <div id="gameOverScreen" class="overlay hidden">
+    <h1 class="gameover">HAS CAÍDO</h1>
+    <p class="subtitle">Puntuación final: <span id="finalScore">0</span></p>
+    <p class="subtitle">Oleada alcanzada: <span id="finalWave">1</span></p>
+    <button id="restartBtn">REINTENTAR</button>
+  </div>
+
+  <div id="waveBanner"></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

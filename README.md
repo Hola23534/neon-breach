@@ -1,8 +1,9 @@
 # NEON BREACH
 
-Shooter en primera persona en el navegador. Arena neón, oleadas infinitas de enemigos
-y un rifle que no perdona. Hecho con Three.js, sin build step y sin assets externos:
-la geometría, las texturas y los sonidos se generan en tiempo de ejecución.
+Shooter en primera persona en el navegador. Arena neón, oleadas infinitas de
+criminales futuristas y un arsenal que hay que buscarse por el mapa. Hecho con
+Three.js, sin build step y sin assets externos: la geometría, las texturas, los
+personajes y los sonidos se generan en tiempo de ejecución.
 
 ## Jugar
 
@@ -20,31 +21,73 @@ Y abre <http://localhost:8123>.
 |---|---|
 | `WASD` | Moverse |
 | Ratón | Apuntar |
-| Click izq. | Disparar (mantén pulsado para automático) |
-| `R` | Recargar |
+| Click izq. | Disparar (mantén pulsado en las automáticas) |
+| `1` / `2` | Pistola / arma recogida |
+| `R` | Recargar (sólo la pistola) |
+| `F` | Cámara lenta |
 | `Shift` | Sprint |
 | `Espacio` | Saltar |
 | `Esc` | Pausa |
 
+## Armas
+
+La pistola es tu arma fija: floja pero con munición infinita y cargador de 12.
+El resto se recoge en los pedestales repartidos por la arena, trae muy pocas
+balas, y al gastarse vuelves automáticamente a la pistola. Los pedestales
+reaparecen a los 25 segundos.
+
+| Arma | Daño | Cadencia | Balas | Notas |
+|---|---|---|---|---|
+| Pistola | 15 | Semi | 12 (∞) | Siempre disponible, se recarga con `R` |
+| Escopeta | 15 ×9 | Semi | 5 | Nueve perdigones, demoledora de cerca |
+| Railgun | 130 | Lenta | 3 | Atraviesa a todos los enemigos en línea |
+| Plasma | 19 | Auto | 22 | Muy rápida, ideal contra grupos |
+
+**Los disparos a la cabeza hacen el doble de daño y dan el doble de puntos.**
+
 ## Enemigos
 
-| Tipo | Color | Vida | Velocidad | Daño | Puntos |
-|---|---|---|---|---|---|
-| Grunt | Magenta | 40 | Media | 12 | 100 |
-| Swift | Cian | 22 | Alta | 8 | 150 |
-| Brute | Naranja | 150 | Baja | 26 | 320 |
+| Tipo | Color | Vida | Comportamiento | Puntos |
+|---|---|---|---|---|
+| Thug | Magenta | 45 | Va a por ti cuerpo a cuerpo | 100 |
+| Runner | Cian | 22 | Rápido y frágil, te desborda | 150 |
+| Gunner | Lima | 34 | Mantiene 15 m y dispara proyectiles esquivables | 220 |
+| Brute | Naranja | 125 | Lento y muy duro, pega fortísimo | 320 |
 
-Cada oleada añade enemigos y, a partir de la 2ª y la 4ª, empiezan a aparecer swifts y
-brutes. Al morir sueltan orbes: verde cura 25 PV, cian da 45 balas.
+Los gunners aparecen a partir de la oleada 2 y los brutes de la 4. Al morir
+sueltan orbes: verde cura 25 PV, morado recarga media barra de cámara lenta.
+
+## Cámara lenta
+
+`F` activa el bullet time: el mundo baja al 30 % de velocidad y tú al 62 %,
+mientras que apuntar sigue a velocidad normal. Consume una barra de energía que
+da para unos 3 segundos y tarda 12 en llenarse sola. Por debajo del 22 % no se
+puede reactivar.
 
 ## Estructura
 
 - `index.html` — HUD, overlays e *import map* de Three.js (desde unpkg).
 - `style.css` — estética synthwave del HUD y los menús.
-- `main.js` — todo el juego: arena, física, IA, disparo, partículas, oleadas y audio.
+- `main.js` — todo el juego: arena, física, personajes, IA, armas, partículas,
+  oleadas y audio.
+
+### Detalles de implementación
+
+- **Rig humanoide compartido** (`buildHumanoid`): un único constructor genera
+  tanto tu cuerpo en primera persona como los cuatro enemigos, con las
+  extremidades colgando de pivotes en la articulación para animar el paso.
+- **Arma en cámara propia**: el viewmodel se renderiza en una capa aparte con su
+  propio `PerspectiveCamera` a 55° y limpieza de profundidad, para que no se
+  deforme con el FOV de 78° del mundo ni lo recorte tu propio torso.
+- **Cuerpo en primera persona**: sigue tu posición y el *yaw* pero nunca el
+  *pitch*, y va ligeramente adelantado respecto al ojo para que se vea al mirar
+  hacia abajo.
+- **Simulación separada del render**: `step(dt)` avanza un tick de juego y
+  `animate()` sólo lo conduce, así el mundo se puede simular de forma
+  determinista al margen de los frames.
 
 ## Ajustes rápidos
 
-Las constantes del principio de `main.js` controlan el balance: `WEAPON` (daño, cadencia,
-cargador), `ENEMY_TYPES` (vida, velocidad, puntos), y `ARENA` / `WALK` / `SPRINT` /
-`GRAVITY` para el movimiento. La intensidad del brillo está en el `UnrealBloomPass`.
+Las constantes del principio de `main.js` controlan el balance: `WEAPONS`,
+`ENEMY_TYPES`, `SLOW` (cámara lenta) y `ARENA` / `WALK` / `SPRINT` / `GRAVITY`
+para el movimiento. La intensidad del brillo está en el `UnrealBloomPass`.

@@ -9,20 +9,37 @@
 <body>
   <div id="crosshair"></div>
 
-  <div id="hud">
-    <div id="healthWrap">
-      <div id="healthLabel">HP</div>
-      <div id="healthBar"><div id="healthFill"></div></div>
+  <div id="scoreWrap">SCORE <span id="score">0</span></div>
+
+  <!-- everything the player needs mid-fight lives in one bottom-left cluster -->
+  <div id="statusPanel">
+    <div class="row">
+      <span class="tag hp">HP</span>
+      <div class="bar hpBar"><div id="healthFill"></div></div>
+      <span id="healthNum">100</span>
     </div>
-    <div id="ammoWrap">
-      <span id="ammo">30</span> / <span id="ammoReserve">90</span>
+
+    <div class="row">
+      <span class="tag slow">SLOW</span>
+      <div class="bar slowBar"><div id="slowFill"></div></div>
+      <span class="key">F</span>
     </div>
-    <div id="scoreWrap">SCORE <span id="score">0</span></div>
-    <div id="waveWrap">WAVE <span id="wave">1</span></div>
+
+    <div class="row weaponRow">
+      <span id="weaponName">PISTOLA</span>
+      <span id="ammoBlock"><span id="ammo">12</span><span id="ammoSep">/</span><span id="ammoReserve">∞</span></span>
+    </div>
+
+    <div class="row waveRow">
+      <span class="tag wave">OLEADA</span><span id="wave">1</span>
+    </div>
   </div>
+
+  <div id="pickupToast"></div>
 
   <div id="hitFlash"></div>
   <div id="lowHealthVignette"></div>
+  <div id="slowVignette"></div>
 
   <div id="startScreen" class="overlay">
     <h1 id="startTitle">NEON BREACH</h1>
@@ -31,10 +48,14 @@
       <div><b>WASD</b> Moverse</div>
       <div><b>RATÓN</b> Apuntar</div>
       <div><b>CLICK</b> Disparar</div>
+      <div><b>1</b> Pistola</div>
       <div><b>R</b> Recargar</div>
+      <div><b>F</b> Cámara lenta</div>
       <div><b>SHIFT</b> Sprint</div>
       <div><b>ESPACIO</b> Saltar</div>
+      <div><b>ESC</b> Pausa</div>
     </div>
+    <p class="subtitle small">Recoge armas por el mapa — tienen pocas balas y vuelves a la pistola al gastarlas.</p>
     <button id="startBtn">CLICK PARA JUGAR</button>
     <p id="startHint" class="hint"></p>
   </div>

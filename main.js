@@ -16,21 +16,56 @@ const JUMP_V = 8.2;
 const WALK = 7.4;
 const SPRINT = 11.6;
 
-const WEAPON = {
-  damage: 26,
-  fireRate: 0.085,
-  magSize: 30,
-  reserveMax: 180,
-  reloadTime: 1.35,
-  spread: 0.012,
-  range: 200,
+// The pistol is the permanent sidearm: weak but never runs dry. Everything else
+// is scavenged off the map with barely any rounds, so it burns fast and drops you
+// back to the pistol.
+const WEAPONS = {
+  pistol: {
+    name: 'PISTOLA', dmg: 15, rate: 0.20, auto: false, mag: 12,
+    spread: 0.011, pellets: 1, reload: 1.0, infinite: true,
+    tracer: 0xbff7ff, flash: 0xfff0a0, kick: 0.85, shakeAmt: 0.022,
+  },
+  shotgun: {
+    name: 'ESCOPETA', dmg: 15, rate: 0.72, auto: false, mag: 5,
+    spread: 0.085, pellets: 9,
+    tracer: 0xffb0e6, flash: 0xffd0f0, kick: 2.2, shakeAmt: 0.075,
+  },
+  railgun: {
+    name: 'RAILGUN', dmg: 130, rate: 0.95, auto: false, mag: 3,
+    spread: 0, pellets: 1, pierce: true, beam: 0.07,
+    tracer: 0xd8a0ff, flash: 0xe8c8ff, kick: 2.6, shakeAmt: 0.085,
+  },
+  plasma: {
+    name: 'PLASMA', dmg: 19, rate: 0.062, auto: true, mag: 22,
+    spread: 0.030, pellets: 1,
+    tracer: 0xdcff9f, flash: 0xeaffb8, kick: 0.7, shakeAmt: 0.020,
+  },
 };
+const SPECIALS = ['shotgun', 'railgun', 'plasma'];
+const RANGE = 200;
+const HEADSHOT_MULT = 2;
 
 const ENEMY_TYPES = {
-  grunt: { hp: 40,  speed: 3.5, dmg: 12, size: 0.85, color: 0xff3fb0, score: 100 },
-  swift: { hp: 22,  speed: 6.4, dmg: 8,  size: 0.55, color: 0x4dfcff, score: 150 },
-  brute: { hp: 150, speed: 2.3, dmg: 26, size: 1.5,  color: 0xffa23f, score: 320 },
+  thug: {
+    hp: 45, speed: 3.4, dmg: 12, height: 1.78, radius: 0.42, score: 100,
+    jacket: 0x2a0a24, trim: 0xff3fb0, accent: 0xff3fb0, ranged: false,
+  },
+  runner: {
+    hp: 22, speed: 6.5, dmg: 8, height: 1.62, radius: 0.34, score: 150,
+    jacket: 0x07222a, trim: 0x4dfcff, accent: 0x4dfcff, ranged: false,
+  },
+  gunner: {
+    hp: 34, speed: 3.0, dmg: 14, height: 1.72, radius: 0.40, score: 220,
+    jacket: 0x2a2205, trim: 0xb6ff4d, accent: 0xb6ff4d, ranged: true,
+    keepDist: 15, fireEvery: 2.1, projSpeed: 15,
+  },
+  brute: {
+    hp: 125, speed: 2.2, dmg: 26, height: 2.45, radius: 0.72, score: 320,
+    jacket: 0x2e1403, trim: 0xffa23f, accent: 0xffa23f, ranged: false, bulk: 1.5,
+  },
 };
+
+const SLOW = { world: 0.30, player: 0.62, drain: 1 / 3.2, recharge: 1 / 12, minToStart: 0.22 };
 
 // ---------------------------------------------------------------- utilities
 
@@ -69,6 +104,26 @@ function glowSprite(color, size, opacity = 0.75) {
   }));
   sprite.scale.setScalar(size);
   return sprite;
+}
+
+function textSprite(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 36px Orbitron, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, 128, 34);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, color, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: false,
+  }));
+  s.scale.set(2.4, 0.6, 1);
+  return s;
 }
 
 // ---------------------------------------------------------------- audio
@@ -116,13 +171,22 @@ const Sfx = {
     const end = this.env(f, peak, 0.005, dur);
     src.start(t); src.stop(end + 0.02);
   },
-  shoot()  { this.tone('sawtooth', 880, 90, 0.10, 0.09); this.burst(0.05, 0.06, 6000, 900); },
-  hit()    { this.tone('sine', 1500, 900, 0.07, 0.05); },
-  kill()   { this.burst(0.16, 0.35, 3500, 120); this.tone('square', 300, 60, 0.06, 0.3); },
-  hurt()   { this.tone('square', 140, 55, 0.16, 0.28); },
-  reload() { this.tone('square', 260, 200, 0.05, 0.04); setTimeout(() => this.tone('square', 400, 320, 0.05, 0.05), 180); },
-  pickup() { this.tone('sine', 700, 1400, 0.09, 0.16); },
-  wave()   { this.tone('triangle', 300, 600, 0.10, 0.25); setTimeout(() => this.tone('triangle', 500, 900, 0.10, 0.35), 200); },
+  pistol()  { this.tone('square', 700, 110, 0.09, 0.07); this.burst(0.05, 0.05, 5000, 800); },
+  shotgun() { this.burst(0.22, 0.28, 4200, 240); this.tone('sawtooth', 240, 60, 0.10, 0.22); },
+  railgun() { this.tone('sawtooth', 1600, 120, 0.12, 0.32); this.tone('sine', 300, 1800, 0.07, 0.16); },
+  plasma()  { this.tone('triangle', 1150, 340, 0.07, 0.06); },
+  hit()     { this.tone('sine', 1500, 900, 0.07, 0.05); },
+  headshot(){ this.tone('sine', 2400, 1500, 0.10, 0.09); },
+  kill()    { this.burst(0.15, 0.34, 3200, 110); this.tone('square', 280, 55, 0.06, 0.28); },
+  hurt()    { this.tone('square', 140, 55, 0.16, 0.28); },
+  reload()  { this.tone('square', 260, 200, 0.05, 0.04); setTimeout(() => this.tone('square', 400, 320, 0.05, 0.05), 170); },
+  pickup()  { this.tone('sine', 700, 1400, 0.09, 0.16); },
+  weapon()  { this.tone('sawtooth', 420, 900, 0.10, 0.2); setTimeout(() => this.tone('square', 900, 1300, 0.07, 0.12), 110); },
+  dryFire() { this.tone('square', 180, 140, 0.05, 0.03); },
+  enemyShot(){ this.tone('sawtooth', 420, 150, 0.05, 0.14); },
+  slowOn()  { this.tone('sine', 800, 200, 0.09, 0.5); },
+  slowOff() { this.tone('sine', 220, 800, 0.08, 0.35); },
+  wave()    { this.tone('triangle', 300, 600, 0.10, 0.25); setTimeout(() => this.tone('triangle', 500, 900, 0.10, 0.35), 200); },
 };
 
 // ---------------------------------------------------------------- renderer / scene
@@ -135,11 +199,27 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x0a0316, 0.019);
 
-const camera = new THREE.PerspectiveCamera(78, window.innerWidth / window.innerHeight, 0.01, 500);
+const BASE_FOV = 78;
+const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.01, 500);
 scene.add(camera);
+
+// The weapon is rendered by its own camera on a dedicated layer: a narrower FOV
+// keeps it from distorting the way anything held this close to a 78° lens does,
+// and clearing depth first stops your own torso — or a wall you back into — from
+// slicing through the gun.
+const VIEWMODEL_LAYER = 1;
+const vmCamera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 5);
+vmCamera.layers.set(VIEWMODEL_LAYER);
+scene.add(vmCamera);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+
+const vmPass = new RenderPass(scene, vmCamera);
+vmPass.clear = false;
+vmPass.clearDepth = true;
+composer.addPass(vmPass);
+
 const bloom = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight), 0.62, 0.5, 0.35
 );
@@ -148,7 +228,6 @@ composer.addPass(new OutputPass());
 
 // ---------------------------------------------------------------- world
 
-// sky gradient dome
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(280, 32, 16),
   new THREE.ShaderMaterial({
@@ -179,7 +258,6 @@ const sky = new THREE.Mesh(
 sky.renderOrder = -999;
 scene.add(sky);
 
-// floor with a glowing grid
 function gridTexture() {
   const S = 256;
   const c = document.createElement('canvas');
@@ -212,9 +290,8 @@ const floor = new THREE.Mesh(
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
 
-// solid geometry the player, enemies and bullets collide with
 const obstacles = [];   // { box: THREE.Box3 }
-const solids = [];      // meshes for bullet raycasts
+const solids = [];      // meshes bullets can stop against
 
 const wallMat = new THREE.MeshBasicMaterial({ color: 0x0d0524 });
 const NEON = [0x4dfcff, 0xff3fb0, 0xb6ff4d, 0xffd24d, 0x9d4dff];
@@ -232,40 +309,135 @@ function addBlock(x, y, z, w, h, d, neon) {
   edges.position.copy(mesh.position);
   scene.add(edges);
 
-  const box = new THREE.Box3().setFromCenterAndSize(
-    mesh.position, new THREE.Vector3(w, h, d)
-  );
-  obstacles.push({ box });
+  obstacles.push({
+    box: new THREE.Box3().setFromCenterAndSize(mesh.position, new THREE.Vector3(w, h, d)),
+  });
   return mesh;
 }
 
-// perimeter walls
 addBlock(0,  WALL_H / 2, -ARENA - 0.5, ARENA * 2 + 2, WALL_H, 1, 0x4dfcff);
 addBlock(0,  WALL_H / 2,  ARENA + 0.5, ARENA * 2 + 2, WALL_H, 1, 0x4dfcff);
 addBlock(-ARENA - 0.5, WALL_H / 2, 0, 1, WALL_H, ARENA * 2 + 2, 0xff3fb0);
 addBlock( ARENA + 0.5, WALL_H / 2, 0, 1, WALL_H, ARENA * 2 + 2, 0xff3fb0);
 
-// scattered cover
 for (let i = 0; i < 18; i++) {
   const a = rand() * Math.PI * 2;
   const r = 7 + rand() * (ARENA - 11);
   const w = 2 + rand() * 4;
   const h = 1.6 + rand() * 5;
   const d = 2 + rand() * 4;
-  addBlock(
-    Math.cos(a) * r, h / 2, Math.sin(a) * r,
-    w, h, d, NEON[(rand() * NEON.length) | 0]
-  );
+  addBlock(Math.cos(a) * r, h / 2, Math.sin(a) * r, w, h, d, NEON[(rand() * NEON.length) | 0]);
 }
 
-// central pillar landmark
 addBlock(0, 4, 0, 3, 8, 3, 0xb6ff4d);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
+// ---------------------------------------------------------------- humanoid rig
+
+// Every character in the game — the player's own body and all four enemy types —
+// is built from this one rig. Limbs hang off pivot groups placed at the joint so
+// rotating the pivot swings the limb from the shoulder or hip.
+function buildHumanoid(cfg) {
+  const { height, jacket, trim, accent, bulk = 1 } = cfg;
+
+  const mats = {
+    body: new THREE.MeshBasicMaterial({ color: jacket }),
+    edge: new THREE.LineBasicMaterial({ color: trim }),
+    accent: new THREE.MeshBasicMaterial({ color: accent }),
+  };
+
+  const root = new THREE.Group();
+  const u = height / 1.75;             // scale everything off a 1.75m reference
+  const shoulderW = 0.40 * u * bulk;
+
+  function slab(w, h, d, mat) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(geo, mat || mats.body);
+    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), mats.edge));
+    return mesh;
+  }
+
+  // a limb hangs downward from a pivot placed at the joint
+  function limb(w, h, d, jointX, jointY) {
+    const pivot = new THREE.Group();
+    pivot.position.set(jointX, jointY, 0);
+    const mesh = slab(w, h, d);
+    mesh.position.y = -h / 2;
+    pivot.add(mesh);
+    root.add(pivot);
+    return pivot;
+  }
+
+  // Proportions are anchored so the model actually reaches `height`: hips at
+  // half, shoulders at 0.785, top of the skull at 1.0. Getting this wrong makes
+  // enemies shorter than declared and eye-level shots sail over their heads.
+  const hipY = 0.50 * height;
+  const chestH = 0.30 * height;
+  const shoulderY = 0.785 * height;
+  const headSize = 0.15 * height;
+  const headY = height - headSize * 0.5;
+
+  const torso = slab(shoulderW * 1.05, chestH, 0.24 * u * bulk);
+  torso.position.y = hipY + chestH / 2;
+  root.add(torso);
+
+  const hips = slab(shoulderW * 0.85, 0.10 * height, 0.22 * u * bulk);
+  hips.position.y = hipY;
+  root.add(hips);
+
+  // jacket detail: a lit collar and two chest stripes, the parts bloom picks up
+  const collar = new THREE.Mesh(
+    new THREE.BoxGeometry(shoulderW * 1.1, 0.028 * height, 0.26 * u * bulk),
+    mats.accent
+  );
+  collar.position.y = hipY + chestH - 0.02 * height;
+  root.add(collar);
+
+  // characters face -Z, matching the camera's default forward
+  for (const side of [-1, 1]) {
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.022 * height, chestH * 0.62, 0.02),
+      mats.accent
+    );
+    stripe.position.set(side * shoulderW * 0.3, hipY + chestH * 0.5, -0.125 * u * bulk);
+    root.add(stripe);
+  }
+
+  const legH = hipY;
+  const legL = limb(0.13 * u * bulk, legH, 0.15 * u, -shoulderW * 0.29, hipY);
+  const legR = limb(0.13 * u * bulk, legH, 0.15 * u,  shoulderW * 0.29, hipY);
+
+  const armH = 0.32 * height;
+  const armL = limb(0.10 * u * bulk, armH, 0.11 * u, -shoulderW * 0.66, shoulderY);
+  const armR = limb(0.10 * u * bulk, armH, 0.11 * u,  shoulderW * 0.66, shoulderY);
+
+  const head = slab(headSize * 0.86, headSize, headSize * 0.86);
+  head.position.y = headY;
+  root.add(head);
+
+  // glowing visor across the face — reads as "who is this" at a glance
+  const visor = new THREE.Mesh(
+    new THREE.BoxGeometry(headSize * 0.76, headSize * 0.26, 0.012),
+    mats.accent
+  );
+  visor.position.set(0, headSize * 0.08, -headSize * 0.45);
+  head.add(visor);
+
+  return { root, mats, torso, head, hips, legL, legR, armL, armR, headY, headSize, shoulderY, height };
+}
+
+function animateHumanoid(rig, phase, amount) {
+  const swing = Math.sin(phase) * amount;
+  rig.legL.rotation.x = swing;
+  rig.legR.rotation.x = -swing;
+  rig.armL.rotation.x = -swing * 0.65;
+  rig.armR.rotation.x = swing * 0.65;
+}
+
 // ---------------------------------------------------------------- particles
 
-const MAX_P = 1400;
+const MAX_P = 1600;
 const pPos = new Float32Array(MAX_P * 3);
 const pCol = new Float32Array(MAX_P * 3);
 const pVel = new Float32Array(MAX_P * 3);
@@ -322,82 +494,166 @@ function updateParticles(dt) {
 // ---------------------------------------------------------------- tracers
 
 const tracers = [];
-const tracerGeo = new THREE.CylinderGeometry(0.022, 0.022, 1, 6, 1, true);
+const tracerGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
 tracerGeo.translate(0, 0.5, 0);
 tracerGeo.rotateX(Math.PI / 2);   // aligned down -Z so lookAt() works
 
-for (let i = 0; i < 20; i++) {
+for (let i = 0; i < 28; i++) {
   const m = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({
     color: 0xbff7ff, blending: THREE.AdditiveBlending,
     transparent: true, depthWrite: false, fog: false,
   }));
   m.visible = false;
   scene.add(m);
-  tracers.push({ mesh: m, life: 0 });
+  tracers.push({ mesh: m, life: 0, max: 0.06 });
 }
 let tracerCursor = 0;
 
-function spawnTracer(from, to) {
+function spawnTracer(from, to, color, thickness = 0.022, life = 0.06) {
   const t = tracers[tracerCursor];
   tracerCursor = (tracerCursor + 1) % tracers.length;
   t.mesh.position.copy(from);
   t.mesh.lookAt(to);
-  t.mesh.scale.set(1, 1, from.distanceTo(to));
+  t.mesh.scale.set(thickness, thickness, from.distanceTo(to));
+  t.mesh.material.color.set(color);
   t.mesh.visible = true;
-  t.life = 0.06;
+  t.life = t.max = life;
 }
+
+// ---------------------------------------------------------------- player body
+
+// A first-person body: torso and legs only. The head would sit inside the camera
+// and the arms belong to the weapon viewmodel, so both are left off. The body
+// tracks the camera's yaw but never its pitch, so looking down shows your chest
+// and boots rather than swinging the whole model.
+// Anatomically the chest sits behind the eyes, but then you only glimpse it at
+// near-vertical angles. Nudging the body forward instead brings the jacket and
+// boots into view at ordinary look-down angles — the usual first-person cheat.
+const BODY_FWD = 0.13;
+
+// The accent colour is deliberately muted here. On an enemy across the arena a
+// solid neon panel reads beautifully; 30 cm from the lens the same panel is a
+// white blob once bloom hits it, so the player's jacket is dark with lit seams.
+const playerRig = buildHumanoid({
+  height: 1.75, jacket: 0x0d1430, trim: 0x64b5ff, accent: 0x1d4f7a,
+});
+playerRig.head.visible = false;
+playerRig.armL.visible = false;
+playerRig.armR.visible = false;
+playerRig.torso.scale.z = 0.82;   // slimmer front-to-back so you can see past it
+
+// Police detail. Looking straight down mostly shows the TOP of the torso, so the
+// jacket needs shoulder pads and a raised collar up there — otherwise it reads as
+// a blank slab. The badge and belt are for the view at shallower angles.
+{
+  const add = (geo, color, x, y, z) => {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+    m.position.set(x, y, z);
+    m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), playerRig.mats.edge));
+    playerRig.root.add(m);
+    return m;
+  };
+
+  for (const side of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.13, 0.055, 0.20), 0x1c2c60, side * 0.165, 1.375, 0);
+  }
+
+  add(new THREE.BoxGeometry(0.20, 0.07, 0.17), 0x1c2c60, 0, 1.40, 0.01);   // raised collar
+  add(new THREE.BoxGeometry(0.40, 0.05, 0.24), 0x1c2c60, 0, 0.875, 0);     // duty belt
+
+  const badge = add(new THREE.BoxGeometry(0.06, 0.06, 0.02), 0x8a6a10, -0.13, 1.26, -0.10);
+  badge.rotation.z = Math.PI / 4;
+}
+scene.add(playerRig.root);
 
 // ---------------------------------------------------------------- weapon viewmodel
 
-// a wide FOV distorts anything held close to the lens, so the viewmodel is kept
-// small and pushed out; the yaw angles it inward so it reads as a gun, not a slab
-const GUN_HOME = new THREE.Vector3(0.155, -0.135, -0.42);
+const GUN_HOME = new THREE.Vector3(0.128, -0.112, -0.46);
 const GUN_YAW = 0.075;
 
 const gun = new THREE.Group();
 gun.position.copy(GUN_HOME);
 gun.rotation.y = GUN_YAW;
-gun.scale.setScalar(0.52);
-camera.add(gun);
+gun.scale.setScalar(0.56);
+vmCamera.add(gun);
 
-// solid dark shells with neon edge outlines — the outlines are what the bloom catches
 const gunShellMat = new THREE.MeshBasicMaterial({ color: 0x120a24 });
+const gunAccentMat = new THREE.MeshBasicMaterial({ color: 0x4dfcff });
+const gunEdgeMat = new THREE.LineBasicMaterial({ color: 0x4dfcff });
+const gloveMat = new THREE.MeshBasicMaterial({ color: 0x101a3a });
 
-function gunPart(w, h, d, x, y, z, edgeColor) {
-  const geo = new THREE.BoxGeometry(w, h, d);
-  const mesh = new THREE.Mesh(geo, gunShellMat);
-  mesh.position.set(x, y, z);
-  gun.add(mesh);
+// each weapon gets its own silhouette, swapped in when equipped
+const gunModels = {};
+function buildGunModel(key) {
+  const g = new THREE.Group();
+  const edge = new THREE.LineBasicMaterial({ color: WEAPONS[key].tracer });
 
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({ color: edgeColor, fog: false })
-  );
-  edges.position.copy(mesh.position);
-  gun.add(edges);
-  return mesh;
+  const part = (w, h, d, x, y, z, mat) => {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const m = new THREE.Mesh(geo, mat || gunShellMat);
+    m.position.set(x, y, z);
+    m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edge));
+    g.add(m);
+    return m;
+  };
+
+  if (key === 'pistol') {
+    part(0.052, 0.062, 0.20, 0, 0, -0.05);
+    part(0.024, 0.024, 0.10, 0, 0.006, -0.19);
+    part(0.046, 0.095, 0.055, 0, -0.070, 0.020);
+    part(0.010, 0.016, 0.010, 0, 0.040, -0.13, gunAccentMat);
+  } else if (key === 'shotgun') {
+    part(0.062, 0.072, 0.34, 0, 0, -0.10);
+    part(0.030, 0.055, 0.30, 0, -0.030, -0.20);
+    part(0.048, 0.100, 0.060, 0, -0.070, 0.055);
+    part(0.070, 0.020, 0.10, 0, 0.042, -0.02, gunAccentMat);
+  } else if (key === 'railgun') {
+    part(0.056, 0.066, 0.30, 0, 0, -0.06);
+    part(0.020, 0.020, 0.40, 0, 0.020, -0.34);
+    part(0.044, 0.098, 0.058, 0, -0.070, 0.050);
+    for (const s of [-1, 1]) {
+      part(0.012, 0.070, 0.10, s * 0.042, 0.030, -0.20, gunAccentMat);
+    }
+  } else {  // plasma
+    part(0.060, 0.074, 0.26, 0, 0, -0.07);
+    part(0.034, 0.034, 0.16, 0, 0.010, -0.26);
+    part(0.046, 0.092, 0.056, 0, -0.068, 0.048);
+    part(0.030, 0.030, 0.030, 0, 0.056, -0.10, gunAccentMat);
+    part(0.038, 0.048, 0.038, 0, -0.052, -0.13, gunAccentMat);
+  }
+
+  // gloved hands, so the body's missing arms are never noticed. Kept small and
+  // dim-edged: they sit nearest the lens and would otherwise dominate the frame.
+  const hand = (x, y, z, rot) => {
+    const geo = new THREE.BoxGeometry(0.055, 0.055, 0.085);
+    const m = new THREE.Mesh(geo, gloveMat);
+    m.position.set(x, y, z);
+    m.rotation.x = rot;
+    m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), gunEdgeMat));
+    g.add(m);
+  };
+  hand(0, -0.050, 0.020, 0.25);
+  if (key !== 'pistol') hand(-0.015, -0.055, -0.175, 0.1);
+
+  g.visible = false;
+  gun.add(g);
+  return g;
 }
-
-gunPart(0.058, 0.070, 0.28, 0, 0, -0.07, 0x4dfcff);        // receiver
-gunPart(0.028, 0.028, 0.20, 0, 0.010, -0.29, 0x4dfcff);    // barrel shroud
-gunPart(0.036, 0.075, 0.045, 0, -0.055, -0.08, 0xff3fb0);  // magazine
-gunPart(0.044, 0.090, 0.055, 0, -0.058, 0.055, 0x9d4dff);  // grip
-gunPart(0.011, 0.020, 0.011, 0, 0.046, -0.20, 0xb6ff4d);   // front sight
+for (const key of Object.keys(WEAPONS)) gunModels[key] = buildGunModel(key);
 
 const muzzleFlash = glowSprite(0xfff0a0, 0.5);
 muzzleFlash.position.set(0, 0.012, -0.42);
 muzzleFlash.visible = false;
 gun.add(muzzleFlash);
 
-const muzzleLight = new THREE.PointLight(0xffd27a, 0, 12, 2);
-muzzleLight.position.copy(muzzleFlash.position);
-gun.add(muzzleLight);
+// the whole weapon rig belongs to the viewmodel layer, so the world camera skips it
+gun.traverse((o) => o.layers.set(VIEWMODEL_LAYER));
 
 let gunRecoil = 0;
 let bobPhase = 0;
 let flashTimer = 0;
 
-// ---------------------------------------------------------------- player
+// ---------------------------------------------------------------- player state
 
 const controls = new PointerLockControls(camera, document.body);
 
@@ -409,29 +665,45 @@ const player = {
   maxHp: 100,
   score: 0,
   alive: true,
+  yaw: 0,
 };
 
-const weapon = { ammo: WEAPON.magSize, reserve: 90, cooldown: 0, reloading: 0 };
+// slot 1 is always the pistol; slot 2 holds whatever was scavenged last
+const loadout = {
+  pistol: { key: 'pistol', ammo: WEAPONS.pistol.mag },
+  special: null,
+  equipped: 'pistol',
+  cooldown: 0,
+  reloading: 0,
+};
+
+const slowmo = { active: false, energy: 1 };
 
 const keys = Object.create(null);
 let shake = 0;
+let triggerHeld = false;
+let triggerConsumed = false;
 
 addEventListener('keydown', (e) => {
+  if (e.repeat) return;
   keys[e.code] = true;
   if (e.code === 'KeyR') startReload();
+  if (e.code === 'Digit1') equip('pistol');
+  if (e.code === 'Digit2') equip('special');
+  if (e.code === 'KeyF') toggleSlowmo();
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 
-let firing = false;
-addEventListener('mousedown', (e) => { if (e.button === 0) firing = true; });
-addEventListener('mouseup', (e) => { if (e.button === 0) firing = false; });
+addEventListener('mousedown', (e) => {
+  if (e.button === 0) { triggerHeld = true; triggerConsumed = false; }
+});
+addEventListener('mouseup', (e) => { if (e.button === 0) triggerHeld = false; });
 
 // Slide a body out of any obstacle it overlaps, and report whether it ended up
 // standing on one. `pos` is the reference point; the body spans `hDown` below it
-// and `hUp` above — the player's reference point is their eye (hUp 0), an enemy's
-// is its centre. Expanding the box by those amounts turns the test into a point
-// check, so the forbidden y range is [min.y - hUp, max.y + hDown].
+// and `hUp` above — the player's reference point is their eye, an enemy's is its
+// feet. Expanding the box by those amounts turns the test into a point check.
 const _min = new THREE.Vector3(), _max = new THREE.Vector3();
 function resolveCollisions(pos, radius, hDown, hUp) {
   let grounded = false;
@@ -441,16 +713,15 @@ function resolveCollisions(pos, radius, hDown, hUp) {
     if (pos.x < _min.x || pos.x > _max.x || pos.y < _min.y ||
         pos.y > _max.y || pos.z < _min.z || pos.z > _max.z) continue;
 
-    // push out along the axis with the smallest penetration
     const px = Math.min(pos.x - _min.x, _max.x - pos.x);
     const py = Math.min(pos.y - _min.y, _max.y - pos.y);
     const pz = Math.min(pos.z - _min.z, _max.z - pos.z);
 
     if (py <= px && py <= pz) {
       if (pos.y - _min.y < _max.y - pos.y) {
-        pos.y = _min.y;               // clipped the underside
+        pos.y = _min.y;
       } else {
-        pos.y = _max.y;               // landed on top
+        pos.y = _max.y;
         grounded = true;
       }
     } else if (px <= pz) {
@@ -462,10 +733,23 @@ function resolveCollisions(pos, radius, hDown, hUp) {
   return grounded;
 }
 
+function pointInObstacle(p, pad = 0) {
+  for (const { box } of obstacles) {
+    if (p.x > box.min.x - pad && p.x < box.max.x + pad &&
+        p.y > box.min.y - pad && p.y < box.max.y + pad &&
+        p.z > box.min.z - pad && p.z < box.max.z + pad) return true;
+  }
+  return false;
+}
+
 const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _wish = new THREE.Vector3();
 
 function updatePlayer(dt) {
   camera.getWorldDirection(_fwd);
+  // read yaw off the direction vector: PointerLockControls writes the camera
+  // quaternion in YXZ order, so camera.rotation.y is not the yaw once pitched
+  player.yaw = Math.atan2(-_fwd.x, -_fwd.z);
+
   _fwd.y = 0; _fwd.normalize();
   _right.crossVectors(_fwd, THREE.Object3D.DEFAULT_UP).normalize();
 
@@ -479,7 +763,6 @@ function updatePlayer(dt) {
   const speed = (keys.ShiftLeft || keys.ShiftRight) ? SPRINT : WALK;
   if (moving) _wish.normalize().multiplyScalar(speed);
 
-  // horizontal acceleration with friction
   const accel = player.onGround ? 14 : 4;
   player.vel.x += (_wish.x - player.vel.x) * clamp(accel * dt, 0, 1);
   player.vel.z += (_wish.z - player.vel.z) * clamp(accel * dt, 0, 1);
@@ -492,19 +775,16 @@ function updatePlayer(dt) {
 
   player.pos.addScaledVector(player.vel, dt);
 
-  // floor + arena bounds
   player.onGround = false;
   if (player.pos.y <= EYE_H) { player.pos.y = EYE_H; player.vel.y = 0; player.onGround = true; }
   player.pos.x = clamp(player.pos.x, -ARENA + PLAYER_R, ARENA - PLAYER_R);
   player.pos.z = clamp(player.pos.z, -ARENA + PLAYER_R, ARENA - PLAYER_R);
 
-  // the player's reference point is the eye, so the body hangs EYE_H below it
   if (resolveCollisions(player.pos, PLAYER_R, EYE_H, 0)) {
     if (player.vel.y < 0) player.vel.y = 0;
     player.onGround = true;
   }
 
-  // view bob
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
   bobPhase += dt * hSpeed * 1.5;
   const bobY = player.onGround ? Math.sin(bobPhase * 2) * 0.022 * (hSpeed / WALK) : 0;
@@ -520,7 +800,21 @@ function updatePlayer(dt) {
     camera.position.z += (Math.random() - 0.5) * shake;
   }
 
-  // weapon sway follows the bob, recoil kicks back and up
+  // the viewmodel camera rides along with the real one
+  vmCamera.position.copy(camera.position);
+  vmCamera.quaternion.copy(camera.quaternion);
+
+  // Body follows position and yaw only, and strides in time with the head bob.
+  // It sits slightly behind the eye — the camera represents the front of the
+  // head, so without the offset the chest crowds the bottom of the screen.
+  playerRig.root.position.set(
+    player.pos.x - Math.sin(player.yaw) * BODY_FWD,
+    player.pos.y - EYE_H,
+    player.pos.z - Math.cos(player.yaw) * BODY_FWD
+  );
+  playerRig.root.rotation.y = player.yaw;
+  animateHumanoid(playerRig, bobPhase, player.onGround ? clamp(hSpeed / WALK, 0, 1.2) * 0.55 : 0.18);
+
   gunRecoil = Math.max(0, gunRecoil - dt * 7);
   gun.position.set(
     GUN_HOME.x + bobX * 0.5,
@@ -529,63 +823,146 @@ function updatePlayer(dt) {
   );
   gun.rotation.set(-gunRecoil * 0.13, GUN_YAW + bobX * 0.1, 0);
 
-  if (weapon.reloading > 0) {
-    const t = 1 - weapon.reloading / WEAPON.reloadTime;
+  if (loadout.reloading > 0) {
+    const t = 1 - loadout.reloading / WEAPONS.pistol.reload;
     gun.rotation.x -= Math.sin(t * Math.PI) * 0.9;
     gun.position.y -= Math.sin(t * Math.PI) * 0.14;
   }
 }
 
-// ---------------------------------------------------------------- shooting
+// ---------------------------------------------------------------- weapons
 
-const raycaster = new THREE.Raycaster();
-raycaster.far = WEAPON.range;
-const _dir = new THREE.Vector3();
-const _muzzleWorld = new THREE.Vector3();
+function activeSlot() {
+  return loadout.equipped === 'pistol' ? loadout.pistol : loadout.special;
+}
+function activeWeapon() {
+  const slot = activeSlot();
+  return slot ? WEAPONS[slot.key] : WEAPONS.pistol;
+}
+
+function equip(which) {
+  if (which === 'special' && !loadout.special) return;
+  if (loadout.equipped === which) return;
+  loadout.equipped = which;
+  loadout.reloading = 0;
+  loadout.cooldown = Math.max(loadout.cooldown, 0.22);
+  gunRecoil = 0.6;
+  refreshGunModel();
+  Sfx.weapon();
+  updateHUD();
+}
+
+function refreshGunModel() {
+  const key = activeSlot() ? activeSlot().key : 'pistol';
+  for (const k of Object.keys(gunModels)) gunModels[k].visible = (k === key);
+  muzzleFlash.material.color.set(WEAPONS[key].flash);
+}
+
+function givePickupWeapon(key) {
+  loadout.special = { key, ammo: WEAPONS[key].mag };
+  loadout.equipped = 'special';
+  loadout.reloading = 0;
+  loadout.cooldown = 0.25;
+  refreshGunModel();
+  Sfx.weapon();
+  showToast(`${WEAPONS[key].name}  ×${WEAPONS[key].mag}`);
+  updateHUD();
+}
 
 function startReload() {
-  if (!running || weapon.reloading > 0) return;
-  if (weapon.ammo >= WEAPON.magSize || weapon.reserve <= 0) return;
-  weapon.reloading = WEAPON.reloadTime;
+  if (!running || loadout.reloading > 0) return;
+  if (loadout.equipped !== 'pistol') return;      // scavenged guns have no spare mags
+  if (loadout.pistol.ammo >= WEAPONS.pistol.mag) return;
+  loadout.reloading = WEAPONS.pistol.reload;
   Sfx.reload();
 }
 
-function fire() {
-  if (weapon.reloading > 0 || weapon.cooldown > 0) return;
-  if (weapon.ammo <= 0) { startReload(); return; }
+const raycaster = new THREE.Raycaster();
+raycaster.far = RANGE;
+const _dir = new THREE.Vector3();
+const _muzzleWorld = new THREE.Vector3();
 
-  weapon.ammo--;
-  weapon.cooldown = WEAPON.fireRate;
-  gunRecoil = 1;
-  shake = Math.min(0.09, shake + 0.035);
-  flashTimer = 0.045;
+function liveHitboxes() {
+  const list = [];
+  for (const e of enemies) {
+    if (e.dying || e.spawnT > 0) continue;
+    list.push(e.hitBody, e.hitHead);
+  }
+  return list;
+}
+
+function fire() {
+  const w = activeWeapon();
+  const slot = activeSlot();
+  if (loadout.reloading > 0 || loadout.cooldown > 0) return;
+
+  if (slot.ammo <= 0) {
+    if (loadout.equipped === 'pistol') startReload();
+    else Sfx.dryFire();
+    return;
+  }
+
+  slot.ammo--;
+  loadout.cooldown = w.rate;
+  gunRecoil = w.kick;
+  shake = Math.min(0.14, shake + w.shakeAmt);
+  flashTimer = 0.05;
   muzzleFlash.visible = true;
   muzzleFlash.material.rotation = Math.random() * Math.PI;
-  muzzleLight.intensity = 6;
-  Sfx.shoot();
 
-  camera.getWorldDirection(_dir);
-  _dir.x += (Math.random() - 0.5) * WEAPON.spread;
-  _dir.y += (Math.random() - 0.5) * WEAPON.spread;
-  _dir.z += (Math.random() - 0.5) * WEAPON.spread;
-  _dir.normalize();
+  if (w === WEAPONS.pistol) Sfx.pistol();
+  else if (w === WEAPONS.shotgun) Sfx.shotgun();
+  else if (w === WEAPONS.railgun) Sfx.railgun();
+  else Sfx.plasma();
 
-  raycaster.set(camera.position, _dir);
   muzzleFlash.getWorldPosition(_muzzleWorld);
+  const targets = [...liveHitboxes(), ...solids];
 
-  const hits = raycaster.intersectObjects([...enemies.map(e => e.hitbox), ...solids], false);
-  const hit = hits[0];
-  const end = hit
-    ? hit.point.clone()
-    : camera.position.clone().addScaledVector(_dir, WEAPON.range);
+  for (let p = 0; p < w.pellets; p++) {
+    camera.getWorldDirection(_dir);
+    _dir.x += (Math.random() - 0.5) * w.spread;
+    _dir.y += (Math.random() - 0.5) * w.spread;
+    _dir.z += (Math.random() - 0.5) * w.spread;
+    _dir.normalize();
 
-  spawnTracer(_muzzleWorld, end);
+    raycaster.set(camera.position, _dir);
+    const hits = raycaster.intersectObjects(targets, false);
 
-  if (hit && hit.object.userData.enemy) {
-    const enemy = hit.object.userData.enemy;
-    damageEnemy(enemy, WEAPON.damage, end);
-  } else if (hit) {
-    spawnParticles(end, 0x9fd8ff, 8, 3.5, 0.35);
+    let end = null;
+    if (w.pierce) {
+      // the railgun punches through every enemy until it meets solid geometry
+      const struck = new Set();
+      for (const h of hits) {
+        const enemy = h.object.userData.enemy;
+        if (!enemy) { end = h.point.clone(); break; }
+        if (!struck.has(enemy)) {
+          struck.add(enemy);
+          damageEnemy(enemy, w.dmg * (h.object.userData.head ? HEADSHOT_MULT : 1),
+                      h.point, h.object.userData.head);
+        }
+      }
+      if (!end) end = camera.position.clone().addScaledVector(_dir, RANGE);
+    } else {
+      const hit = hits[0];
+      end = hit ? hit.point.clone() : camera.position.clone().addScaledVector(_dir, RANGE);
+      if (hit && hit.object.userData.enemy) {
+        damageEnemy(hit.object.userData.enemy,
+                    w.dmg * (hit.object.userData.head ? HEADSHOT_MULT : 1),
+                    end, hit.object.userData.head);
+      } else if (hit) {
+        spawnParticles(end, 0x9fd8ff, 6, 3.5, 0.3);
+      }
+    }
+    spawnTracer(_muzzleWorld, end, w.tracer, w.beam || 0.022, w.beam ? 0.16 : 0.06);
+  }
+
+  // a scavenged gun that runs dry is dropped and the pistol comes back up
+  if (slot.ammo <= 0 && loadout.equipped === 'special') {
+    loadout.special = null;
+    loadout.equipped = 'pistol';
+    loadout.cooldown = Math.max(loadout.cooldown, 0.45);
+    refreshGunModel();
+    showToast('SIN MUNICIÓN — PISTOLA');
   }
   updateHUD();
 }
@@ -593,41 +970,51 @@ function fire() {
 // ---------------------------------------------------------------- enemies
 
 const enemies = [];
-const enemyGeoCache = {};
-
-function enemyMeshes(type) {
-  if (!enemyGeoCache[type]) {
-    const s = ENEMY_TYPES[type].size;
-    enemyGeoCache[type] = {
-      core: new THREE.IcosahedronGeometry(s * 0.5, 0),
-      shell: new THREE.IcosahedronGeometry(s, 1),
-      hit: new THREE.SphereGeometry(s * 1.05, 10, 8),
-    };
-  }
-  return enemyGeoCache[type];
-}
 
 function spawnEnemy(type) {
   const def = ENEMY_TYPES[type];
-  const geo = enemyMeshes(type);
-  const group = new THREE.Group();
-
-  const coreMat = new THREE.MeshBasicMaterial({ color: def.color });
-  const core = new THREE.Mesh(geo.core, coreMat);
-  group.add(core);
-
-  const shellMat = new THREE.MeshBasicMaterial({
-    color: def.color, wireframe: true, transparent: true, opacity: 0.55,
+  const rig = buildHumanoid({
+    height: def.height, jacket: def.jacket, trim: def.trim,
+    accent: def.accent, bulk: def.bulk || 1,
   });
-  const shell = new THREE.Mesh(geo.shell, shellMat);
-  group.add(shell);
 
-  group.add(glowSprite(def.color, def.size * 2.4, 0.5));
+  const group = new THREE.Group();
+  group.add(rig.root);
+  group.add(glowSprite(def.accent, def.height * 1.5, 0.32));
 
-  const hitbox = new THREE.Mesh(geo.hit, new THREE.MeshBasicMaterial({ visible: false }));
-  group.add(hitbox);
+  // Two hitboxes: a generous body covering feet to shoulders, and a tight head
+  // worth double. The head is deliberately no bigger than the skull so landing
+  // one still takes aim.
+  const bodyTop = rig.headY - rig.headSize * 0.5;
+  const hitBody = new THREE.Mesh(
+    new THREE.BoxGeometry(def.radius * 2.1, bodyTop, def.radius * 1.7),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitBody.position.y = bodyTop / 2;
+  group.add(hitBody);
 
-  // spawn on a ring, away from the player
+  const hitHead = new THREE.Mesh(
+    new THREE.BoxGeometry(rig.headSize, rig.headSize, rig.headSize),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitHead.position.y = rig.headY;
+  group.add(hitHead);
+
+  // give the gunner something to shoot with
+  if (def.ranged) {
+    const weapon = new THREE.Mesh(
+      new THREE.BoxGeometry(0.09, 0.09, 0.42),
+      new THREE.MeshBasicMaterial({ color: 0x1a1a08 })
+    );
+    weapon.position.set(def.radius * 0.7, rig.shoulderY - def.height * 0.20, -0.22);
+    weapon.add(new THREE.LineSegments(
+      new THREE.EdgesGeometry(weapon.geometry),
+      new THREE.LineBasicMaterial({ color: def.accent })
+    ));
+    group.add(weapon);
+    rig.weapon = weapon;
+  }
+
   let x, z, tries = 0;
   do {
     const a = Math.random() * Math.PI * 2;
@@ -636,25 +1023,30 @@ function spawnEnemy(type) {
     tries++;
   } while (tries < 24 && Math.hypot(x - player.pos.x, z - player.pos.z) < 18);
 
-  const baseY = 1.1 + Math.random() * 1.4;
-  group.position.set(x, baseY, z);
+  group.position.set(x, 0, z);
   scene.add(group);
 
   const enemy = {
-    type, group, core, shell, hitbox, coreMat, shellMat,
-    hp: def.hp, maxHp: def.hp, def,
-    baseY, phase: Math.random() * Math.PI * 2,
-    attackCd: 0, flash: 0, spawnT: 0.55,
+    type, def, group, rig, hitBody, hitHead,
+    hp: def.hp, maxHp: def.hp,
+    phase: Math.random() * Math.PI * 2,
+    walkPhase: Math.random() * 6,
+    attackCd: 0.6 + Math.random() * 0.8,
+    flash: 0, spawnT: 0.55, dying: 0,
   };
-  hitbox.userData.enemy = enemy;
+  hitBody.userData.enemy = enemy;
+  hitHead.userData.enemy = enemy;
+  hitHead.userData.head = true;
   enemies.push(enemy);
 
-  // spawn telegraph
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(def.size * 1.6, 0.05, 6, 24),
-    new THREE.MeshBasicMaterial({ color: def.color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    new THREE.TorusGeometry(def.radius * 2.2, 0.05, 6, 24),
+    new THREE.MeshBasicMaterial({
+      color: def.accent, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
   );
-  ring.position.copy(group.position);
+  ring.position.set(x, 0.06, z);
   ring.rotation.x = Math.PI / 2;
   scene.add(ring);
   enemy.ring = ring;
@@ -663,34 +1055,59 @@ function spawnEnemy(type) {
   return enemy;
 }
 
-function damageEnemy(enemy, amount, at) {
-  if (enemy.hp <= 0) return;
+function damageEnemy(enemy, amount, at, isHead) {
+  if (enemy.hp <= 0 || enemy.dying) return;
   enemy.hp -= amount;
   enemy.flash = 0.1;
-  spawnParticles(at, enemy.def.color, 10, 4.5, 0.4);
-  hitmarker();
+  spawnParticles(at, isHead ? 0xffffff : enemy.def.accent, isHead ? 16 : 9, isHead ? 6 : 4.5, 0.4);
+  hitmarker(isHead);
 
-  if (enemy.hp <= 0) {
-    killEnemy(enemy);
-  } else {
-    Sfx.hit();
-  }
+  if (enemy.hp <= 0) killEnemy(enemy, isHead);
+  else if (isHead) Sfx.headshot();
+  else Sfx.hit();
 }
 
-function killEnemy(enemy) {
+function killEnemy(enemy, isHead) {
   Sfx.kill();
-  spawnParticles(enemy.group.position, enemy.def.color, 46, 8, 1.0);
-  spawnParticles(enemy.group.position, 0xffffff, 14, 5, 0.5);
+  const centre = enemy.group.position.clone();
+  centre.y += enemy.def.height * 0.5;
+  spawnParticles(centre, enemy.def.accent, 40, 7, 0.9);
+  spawnParticles(centre, 0xffffff, 12, 4.5, 0.45);
 
-  player.score += enemy.def.score;
-  scene.remove(enemy.group);
-  if (enemy.ring) scene.remove(enemy.ring);
-  enemies.splice(enemies.indexOf(enemy), 1);
+  player.score += enemy.def.score * (isHead ? 2 : 1);
+  enemy.dying = 0.0001;                     // starts the collapse; AI stops here
+  if (enemy.ring) { scene.remove(enemy.ring); enemy.ring = null; }
+
+  for (const m of Object.values(enemy.rig.mats)) {
+    m.transparent = true;
+  }
 
   if (Math.random() < 0.22) spawnPickup(enemy.group.position, 'health');
-  else if (Math.random() < 0.3) spawnPickup(enemy.group.position, 'ammo');
+  else if (Math.random() < 0.22) spawnPickup(enemy.group.position, 'energy');
 
   updateHUD();
+}
+
+function removeEnemy(enemy) {
+  scene.remove(enemy.group);
+  if (enemy.ring) {
+    scene.remove(enemy.ring);
+    enemy.ring.geometry.dispose();
+    enemy.ring.material.dispose();
+  }
+  // every rig builds its own geometry and materials, so both have to go back.
+  // Sprites are the exception: three shares one global geometry across all of
+  // them, so disposing it would break every glow in the scene.
+  const rigMats = Object.values(enemy.rig.mats);
+  enemy.group.traverse((o) => {
+    if (o.isSprite) { o.material.dispose(); return; }
+    if (o.geometry) o.geometry.dispose();
+    if (o.material && !rigMats.includes(o.material)) o.material.dispose();
+  });
+  for (const m of rigMats) m.dispose();
+
+  const i = enemies.indexOf(enemy);
+  if (i >= 0) enemies.splice(i, 1);
 }
 
 const _toPlayer = new THREE.Vector3();
@@ -699,8 +1116,18 @@ const _sep = new THREE.Vector3();
 function updateEnemies(dt, time) {
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
+    const def = e.def;
 
-    // spawn-in animation
+    if (e.dying > 0) {
+      e.dying += dt;
+      const t = clamp(e.dying / 0.55, 0, 1);
+      e.rig.root.rotation.x = -t * Math.PI * 0.5;     // topple backwards
+      e.group.position.y = -t * 0.35;
+      for (const m of Object.values(e.rig.mats)) m.opacity = 1 - t;
+      if (t >= 1) removeEnemy(e);
+      continue;
+    }
+
     if (e.spawnT > 0) {
       e.spawnT -= dt;
       const t = clamp(1 - e.spawnT / 0.55, 0, 1);
@@ -713,21 +1140,17 @@ function updateEnemies(dt, time) {
       continue;
     }
 
-    _toPlayer.set(
-      player.pos.x - e.group.position.x, 0,
-      player.pos.z - e.group.position.z
-    );
+    _toPlayer.set(player.pos.x - e.group.position.x, 0, player.pos.z - e.group.position.z);
     const dist = _toPlayer.length();
     _toPlayer.normalize();
 
-    // keep enemies from stacking on top of each other
     _sep.set(0, 0, 0);
     for (const o of enemies) {
-      if (o === e) continue;
+      if (o === e || o.dying) continue;
       const dx = e.group.position.x - o.group.position.x;
       const dz = e.group.position.z - o.group.position.z;
       const d2 = dx * dx + dz * dz;
-      const minD = e.def.size + o.def.size + 0.4;
+      const minD = def.radius + o.def.radius + 0.5;
       if (d2 < minD * minD && d2 > 0.0001) {
         const d = Math.sqrt(d2);
         _sep.x += (dx / d) * (1 - d / minD);
@@ -735,48 +1158,259 @@ function updateEnemies(dt, time) {
       }
     }
 
-    const strafe = Math.sin(time * 1.4 + e.phase) * 0.35;
-    const speed = e.def.speed * (dist < 2.5 ? 0.35 : 1);
-    e.group.position.x += (_toPlayer.x * speed + -_toPlayer.z * strafe * speed + _sep.x * 4) * dt;
-    e.group.position.z += (_toPlayer.z * speed + _toPlayer.x * strafe * speed + _sep.z * 4) * dt;
+    // rushers close the gap; gunners hold a firing line and back off if crowded
+    let advance;
+    if (def.ranged) {
+      const gap = dist - def.keepDist;
+      advance = clamp(gap * 0.25, -1, 1);
+    } else {
+      advance = dist < 2.2 ? 0.25 : 1;
+    }
 
-    e.group.position.y = e.baseY + Math.sin(time * 2.2 + e.phase) * 0.28;
+    const strafe = Math.sin(time * 1.2 + e.phase) * (def.ranged ? 0.7 : 0.35);
+    const vx = (_toPlayer.x * advance - _toPlayer.z * strafe) * def.speed + _sep.x * 4;
+    const vz = (_toPlayer.z * advance + _toPlayer.x * strafe) * def.speed + _sep.z * 4;
+
+    e.group.position.x += vx * dt;
+    e.group.position.z += vz * dt;
     e.group.position.x = clamp(e.group.position.x, -ARENA + 1, ARENA - 1);
     e.group.position.z = clamp(e.group.position.z, -ARENA + 1, ARENA - 1);
-    resolveCollisions(e.group.position, e.def.size, e.def.size, e.def.size);
+    resolveCollisions(e.group.position, def.radius, 0, def.height);
+    e.group.position.y = 0;                 // they walk the floor, they don't climb
 
-    e.core.rotation.x += dt * 1.6;
-    e.core.rotation.y += dt * 2.1;
-    e.shell.rotation.y -= dt * 0.9;
-    e.shell.rotation.z += dt * 0.5;
+    // the rig faces -Z, so this turns that face toward the player
+    e.group.rotation.y = Math.atan2(-_toPlayer.x, -_toPlayer.z);
 
-    // hit flash
+    const moveSpeed = Math.hypot(vx, vz);
+    e.walkPhase += dt * (2.2 + moveSpeed * 1.1);
+    animateHumanoid(e.rig, e.walkPhase, clamp(moveSpeed / def.speed, 0.1, 1.2) * 0.7);
+
     if (e.flash > 0) {
       e.flash -= dt;
       const on = e.flash > 0;
-      e.coreMat.color.set(on ? 0xffffff : e.def.color);
-      e.shellMat.opacity = on ? 1 : 0.55;
+      e.rig.mats.accent.color.set(on ? 0xffffff : def.accent);
+      e.rig.mats.edge.color.set(on ? 0xffffff : def.trim);
     }
 
-    // contact damage
     e.attackCd -= dt;
-    const reach = e.def.size + 1.1;
-    if (dist < reach && e.attackCd <= 0 && player.alive) {
+
+    if (def.ranged) {
+      // only shoot with a clear line, otherwise reposition
+      if (e.attackCd <= 0 && dist < 34 && player.alive) {
+        e.attackCd = def.fireEvery * (0.75 + Math.random() * 0.5);
+        fireEnemyShot(e);
+      }
+      // positive pitch swings the hanging arm toward -Z, i.e. forward
+      e.rig.armR.rotation.x = 1.35;
+      e.rig.armL.rotation.x = 1.1;
+    } else if (dist < def.radius + 1.2 && e.attackCd <= 0 && player.alive) {
       e.attackCd = 0.9;
-      damagePlayer(e.def.dmg);
-      e.group.position.x -= _toPlayer.x * 1.4;
-      e.group.position.z -= _toPlayer.z * 1.4;
-      spawnParticles(e.group.position, e.def.color, 12, 4, 0.4);
+      damagePlayer(def.dmg);
+      e.group.position.x -= _toPlayer.x * 1.2;
+      e.group.position.z -= _toPlayer.z * 1.2;
+      spawnParticles(
+        new THREE.Vector3(e.group.position.x, def.height * 0.6, e.group.position.z),
+        def.accent, 12, 4, 0.4
+      );
     }
   }
 }
 
-// ---------------------------------------------------------------- pickups
+// ---------------------------------------------------------------- enemy projectiles
+
+const MAX_SHOTS = 60;
+const shots = [];
+const shotGeo = new THREE.SphereGeometry(0.16, 8, 6);
+
+for (let i = 0; i < MAX_SHOTS; i++) {
+  const mesh = new THREE.Mesh(shotGeo, new THREE.MeshBasicMaterial({ color: 0xb6ff4d }));
+  const halo = glowSprite(0xb6ff4d, 1.1, 0.7);
+  mesh.add(halo);
+  mesh.visible = false;
+  scene.add(mesh);
+  shots.push({ mesh, halo, alive: false, vel: new THREE.Vector3(), life: 0, dmg: 0 });
+}
+
+const _shotDir = new THREE.Vector3();
+
+function fireEnemyShot(e) {
+  const s = shots.find(o => !o.alive);
+  if (!s) return;
+
+  const origin = new THREE.Vector3(
+    e.group.position.x, e.def.height * 0.72, e.group.position.z
+  );
+  // aim at the chest, not the eye, and let the shot be slow enough to sidestep
+  _shotDir.set(
+    player.pos.x - origin.x,
+    (player.pos.y - 0.35) - origin.y,
+    player.pos.z - origin.z
+  ).normalize();
+
+  s.mesh.position.copy(origin).addScaledVector(_shotDir, e.def.radius + 0.4);
+  s.vel.copy(_shotDir).multiplyScalar(e.def.projSpeed);
+  s.dmg = e.def.dmg;
+  s.life = 4;
+  s.alive = true;
+  s.mesh.visible = true;
+  s.mesh.material.color.set(e.def.accent);
+  s.halo.material.color.set(e.def.accent);
+
+  spawnParticles(origin, e.def.accent, 6, 3, 0.25);
+  Sfx.enemyShot();
+}
+
+function updateShots(dt) {
+  for (const s of shots) {
+    if (!s.alive) continue;
+    s.life -= dt;
+    s.mesh.position.addScaledVector(s.vel, dt);
+
+    const p = s.mesh.position;
+    const dx = p.x - player.pos.x;
+    const dy = p.y - (player.pos.y - EYE_H * 0.45);
+    const dz = p.z - player.pos.z;
+    const hitPlayer = player.alive &&
+      Math.hypot(dx, dz) < PLAYER_R + 0.3 && Math.abs(dy) < EYE_H * 0.62;
+
+    if (hitPlayer) {
+      damagePlayer(s.dmg);
+      spawnParticles(p, 0xff4d6a, 14, 4, 0.4);
+      s.alive = false; s.mesh.visible = false;
+    } else if (s.life <= 0 || p.y < 0.05 || Math.abs(p.x) > ARENA || Math.abs(p.z) > ARENA ||
+               pointInObstacle(p, 0.1)) {
+      spawnParticles(p, s.mesh.material.color.getHex(), 8, 3, 0.3);
+      s.alive = false; s.mesh.visible = false;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- weapon pedestals
+
+const pedestals = [];
+const PEDESTAL_SPOTS = [
+  [-19, -14], [21, -9], [-8, 20], [15, 18], [-24, 6], [4, -22],
+];
+
+function buildWeaponIcon(key) {
+  const g = new THREE.Group();
+  const edge = new THREE.LineBasicMaterial({ color: WEAPONS[key].tracer });
+  const body = new THREE.MeshBasicMaterial({ color: 0x140a28 });
+
+  const part = (w, h, d, x, y, z) => {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const m = new THREE.Mesh(geo, body);
+    m.position.set(x, y, z);
+    m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edge));
+    g.add(m);
+  };
+
+  if (key === 'shotgun') { part(0.16, 0.18, 0.9, 0, 0, 0); part(0.1, 0.14, 0.8, 0, -0.1, -0.05); }
+  else if (key === 'railgun') { part(0.15, 0.17, 0.8, 0, 0, 0); part(0.07, 0.07, 1.0, 0, 0.06, -0.5); }
+  else { part(0.17, 0.2, 0.7, 0, 0, 0); part(0.1, 0.1, 0.4, 0, 0.03, -0.5); }
+
+  g.add(glowSprite(WEAPONS[key].tracer, 2.6, 0.42));
+  return g;
+}
+
+function createPedestal(x, z, key) {
+  const group = new THREE.Group();
+  group.position.set(x, 0, z);
+
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.9, 1.1, 0.25, 12),
+    new THREE.MeshBasicMaterial({ color: 0x0d0524 })
+  );
+  base.position.y = 0.125;
+  base.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(base.geometry),
+    new THREE.LineBasicMaterial({ color: 0x4dfcff })
+  ));
+  group.add(base);
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.95, 0.04, 6, 28),
+    new THREE.MeshBasicMaterial({
+      color: WEAPONS[key].tracer, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.3;
+  group.add(ring);
+
+  const icon = buildWeaponIcon(key);
+  icon.position.y = 1.25;
+  group.add(icon);
+
+  const label = textSprite(WEAPONS[key].name, WEAPONS[key].tracer);
+  label.position.y = 2.15;
+  group.add(label);
+
+  scene.add(group);
+  const ped = { group, icon, label, ring, key, ready: true, respawn: 0 };
+  pedestals.push(ped);
+  return ped;
+}
+
+// the cover blocks are placed by a seeded RNG, so a hand-picked pedestal spot can
+// land inside one; spiral outwards until the pedestal stands in the open
+function clearSpot(x, z) {
+  const probe = new THREE.Vector3();
+  for (let r = 0; r <= 10; r += 1.4) {
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+      const px = x + Math.cos(a) * r;
+      const pz = z + Math.sin(a) * r;
+      if (Math.abs(px) > ARENA - 3 || Math.abs(pz) > ARENA - 3) continue;
+      probe.set(px, 1.2, pz);
+      if (!pointInObstacle(probe, 1.6)) return [px, pz];
+      if (r === 0) break;   // the centre is a single point, no need to sweep it
+    }
+  }
+  return [x, z];
+}
+
+PEDESTAL_SPOTS.forEach(([x, z], i) => {
+  const [px, pz] = clearSpot(x, z);
+  createPedestal(px, pz, SPECIALS[i % SPECIALS.length]);
+});
+
+function updatePedestals(dt, time) {
+  for (const ped of pedestals) {
+    if (!ped.ready) {
+      ped.respawn -= dt;
+      if (ped.respawn <= 0) {
+        ped.ready = true;
+        ped.icon.visible = ped.label.visible = true;
+        spawnParticles(ped.group.position, WEAPONS[ped.key].tracer, 20, 4, 0.6);
+        Sfx.pickup();
+      }
+      ped.ring.material.opacity = 0.12;
+      continue;
+    }
+
+    ped.ring.material.opacity = 0.55 + Math.sin(time * 3) * 0.25;
+    ped.icon.rotation.y += dt * 1.4;
+    ped.icon.position.y = 1.25 + Math.sin(time * 2 + ped.group.position.x) * 0.12;
+
+    const dx = ped.group.position.x - player.pos.x;
+    const dz = ped.group.position.z - player.pos.z;
+    if (dx * dx + dz * dz < 2.6 * 2.6) {
+      ped.ready = false;
+      ped.respawn = 25;
+      ped.icon.visible = ped.label.visible = false;
+      spawnParticles(ped.group.position, WEAPONS[ped.key].tracer, 24, 5, 0.6);
+      givePickupWeapon(ped.key);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- drop pickups
 
 const pickups = [];
 
 function spawnPickup(at, kind) {
-  const color = kind === 'health' ? 0x4dff8f : 0x4dfcff;
+  const color = kind === 'health' ? 0x4dff8f : 0x9d4dff;
   const group = new THREE.Group();
   group.add(new THREE.Mesh(
     new THREE.OctahedronGeometry(0.3, 0),
@@ -797,14 +1431,54 @@ function updatePickups(dt, time) {
     // the orb floats near the ground while player.pos is the eye, so ~1m of the
     // radius is spent on the height difference alone
     if (p.group.position.distanceTo(player.pos) < 2.1) {
-      if (p.kind === 'health') player.hp = Math.min(player.maxHp, player.hp + 25);
-      else weapon.reserve = Math.min(WEAPON.reserveMax, weapon.reserve + 45);
+      if (p.kind === 'health') {
+        player.hp = Math.min(player.maxHp, player.hp + 25);
+        showToast('+25 VIDA');
+      } else {
+        slowmo.energy = Math.min(1, slowmo.energy + 0.5);
+        showToast('+ENERGÍA');
+      }
       Sfx.pickup();
-      spawnParticles(p.group.position, p.kind === 'health' ? 0x4dff8f : 0x4dfcff, 18, 4, 0.5);
+      spawnParticles(p.group.position, p.kind === 'health' ? 0x4dff8f : 0x9d4dff, 18, 4, 0.5);
       scene.remove(p.group);
       pickups.splice(i, 1);
       updateHUD();
     }
+  }
+}
+
+// ---------------------------------------------------------------- slow motion
+
+function toggleSlowmo() {
+  if (!running) return;
+  if (slowmo.active) {
+    slowmo.active = false;
+    Sfx.slowOff();
+  } else {
+    if (slowmo.energy < SLOW.minToStart) { Sfx.dryFire(); return; }
+    slowmo.active = true;
+    Sfx.slowOn();
+  }
+  el.slowVignette.classList.toggle('active', slowmo.active);
+}
+
+function updateSlowmo(dt) {
+  if (slowmo.active) {
+    slowmo.energy -= SLOW.drain * dt;
+    if (slowmo.energy <= 0) {
+      slowmo.energy = 0;
+      slowmo.active = false;
+      el.slowVignette.classList.remove('active');
+      Sfx.slowOff();
+    }
+  } else if (slowmo.energy < 1) {
+    slowmo.energy = Math.min(1, slowmo.energy + SLOW.recharge * dt);
+  }
+
+  const targetFov = slowmo.active ? BASE_FOV + 6 : BASE_FOV;
+  if (Math.abs(camera.fov - targetFov) > 0.05) {
+    camera.fov += (targetFov - camera.fov) * clamp(dt * 6, 0, 1);
+    camera.updateProjectionMatrix();
   }
 }
 
@@ -817,12 +1491,13 @@ let waveBreak = 0;
 
 function buildWave(n) {
   const list = [];
-  const total = 4 + Math.round(n * 2.2);
+  const total = 4 + Math.round(n * 2.0);
   for (let i = 0; i < total; i++) {
     const r = Math.random();
-    if (n >= 4 && r < 0.12 + n * 0.012) list.push('brute');
-    else if (n >= 2 && r < 0.45) list.push('swift');
-    else list.push('grunt');
+    if (n >= 4 && r < 0.10 + n * 0.010) list.push('brute');
+    else if (n >= 2 && r < 0.36) list.push('gunner');
+    else if (n >= 2 && r < 0.60) list.push('runner');
+    else list.push('thug');
   }
   return list;
 }
@@ -836,6 +1511,12 @@ function nextWave() {
   updateHUD();
 }
 
+function livingEnemies() {
+  let n = 0;
+  for (const e of enemies) if (!e.dying) n++;
+  return n;
+}
+
 function updateWaves(dt) {
   if (queue.length > 0) {
     spawnTimer -= dt;
@@ -843,7 +1524,7 @@ function updateWaves(dt) {
       spawnEnemy(queue.pop());
       spawnTimer = 0.35;
     }
-  } else if (enemies.length === 0) {
+  } else if (livingEnemies() === 0) {
     waveBreak -= dt;
     if (waveBreak <= 0) {
       waveBreak = 3.2;
@@ -856,14 +1537,21 @@ function updateWaves(dt) {
 
 const el = {
   health: document.getElementById('healthFill'),
+  healthNum: document.getElementById('healthNum'),
+  slowFill: document.getElementById('slowFill'),
+  weaponName: document.getElementById('weaponName'),
+  ammoBlock: document.getElementById('ammoBlock'),
   ammo: document.getElementById('ammo'),
-  reserve: document.getElementById('ammoReserve'),
+  ammoSep: document.getElementById('ammoSep'),
+  ammoReserve: document.getElementById('ammoReserve'),
   score: document.getElementById('score'),
   wave: document.getElementById('wave'),
   hitFlash: document.getElementById('hitFlash'),
   vignette: document.getElementById('lowHealthVignette'),
+  slowVignette: document.getElementById('slowVignette'),
   crosshair: document.getElementById('crosshair'),
   banner: document.getElementById('waveBanner'),
+  toast: document.getElementById('pickupToast'),
   start: document.getElementById('startScreen'),
   startTitle: document.getElementById('startTitle'),
   startBtn: document.getElementById('startBtn'),
@@ -876,8 +1564,20 @@ const el = {
 function updateHUD() {
   const pct = clamp(player.hp / player.maxHp, 0, 1);
   el.health.style.width = `${pct * 100}%`;
-  el.ammo.textContent = weapon.ammo;
-  el.reserve.textContent = weapon.reserve;
+  el.healthNum.textContent = Math.ceil(player.hp);
+
+  const slot = activeSlot();
+  const w = activeWeapon();
+  const isSpecial = loadout.equipped === 'special';
+
+  el.weaponName.textContent = w.name;
+  el.weaponName.classList.toggle('special', isSpecial);
+  el.ammoBlock.classList.toggle('special', isSpecial);
+  el.ammo.textContent = slot ? slot.ammo : 0;
+  el.ammoSep.style.display = isSpecial ? 'none' : '';
+  el.ammoReserve.style.display = isSpecial ? 'none' : '';
+  el.ammoBlock.classList.toggle('low', slot ? slot.ammo <= (isSpecial ? 1 : 3) : false);
+
   el.score.textContent = player.score;
   el.wave.textContent = Math.max(1, wave);
   el.vignette.style.boxShadow = pct < 0.4
@@ -900,9 +1600,9 @@ function damagePlayer(amount) {
 }
 
 let hitmarkerT = 0;
-function hitmarker() {
-  hitmarkerT = 0.09;
-  el.crosshair.style.transform = 'translate(-50%, -50%) scale(1.5)';
+function hitmarker(isHead) {
+  hitmarkerT = isHead ? 0.14 : 0.09;
+  el.crosshair.style.transform = `translate(-50%, -50%) scale(${isHead ? 1.9 : 1.5})`;
 }
 
 function showWaveBanner(text) {
@@ -912,11 +1612,18 @@ function showWaveBanner(text) {
   el.banner.classList.add('show');
 }
 
+function showToast(text) {
+  el.toast.textContent = text;
+  el.toast.classList.remove('show');
+  void el.toast.offsetWidth;
+  el.toast.classList.add('show');
+}
+
 // ---------------------------------------------------------------- game flow
 
 let running = false;
-let runActive = false;      // a run is underway (possibly paused)
-let freshStart = false;     // the next lock should snap the view to the spawn
+let runActive = false;
+let freshStart = false;
 const clock = new THREE.Clock();
 
 function startGame() {
@@ -933,13 +1640,15 @@ function resumeGame() {
 }
 
 function resetGame() {
-  for (const e of [...enemies]) {
-    scene.remove(e.group);
-    if (e.ring) scene.remove(e.ring);
-  }
-  enemies.length = 0;
+  for (const e of [...enemies]) removeEnemy(e);
   for (const p of pickups) scene.remove(p.group);
   pickups.length = 0;
+  for (const s of shots) { s.alive = false; s.mesh.visible = false; }
+  for (const ped of pedestals) {
+    ped.ready = true;
+    ped.respawn = 0;
+    ped.icon.visible = ped.label.visible = true;
+  }
   pLife.fill(0);
 
   player.pos.set(0, EYE_H, ARENA - 8);
@@ -949,10 +1658,18 @@ function resetGame() {
   player.score = 0;
   player.alive = true;
 
-  weapon.ammo = WEAPON.magSize;
-  weapon.reserve = 90;
-  weapon.reloading = 0;
-  weapon.cooldown = 0;
+  loadout.pistol.ammo = WEAPONS.pistol.mag;
+  loadout.special = null;
+  loadout.equipped = 'pistol';
+  loadout.reloading = 0;
+  loadout.cooldown = 0;
+  refreshGunModel();
+
+  slowmo.active = false;
+  slowmo.energy = 1;
+  el.slowVignette.classList.remove('active');
+  camera.fov = BASE_FOV;
+  camera.updateProjectionMatrix();
 
   wave = 0;
   queue = [];
@@ -967,6 +1684,8 @@ function gameOver() {
   player.alive = false;
   running = false;
   runActive = false;
+  slowmo.active = false;
+  el.slowVignette.classList.remove('active');
   el.finalScore.textContent = player.score;
   el.finalWave.textContent = Math.max(1, wave);
   controls.unlock();
@@ -992,6 +1711,7 @@ controls.addEventListener('lock', () => {
 
 controls.addEventListener('unlock', () => {
   running = false;
+  triggerHeld = false;
   if (player.alive) {
     el.startTitle.textContent = runActive ? 'PAUSA' : 'NEON BREACH';
     el.startBtn.textContent = runActive ? 'CONTINUAR' : 'CLICK PARA JUGAR';
@@ -999,7 +1719,6 @@ controls.addEventListener('unlock', () => {
   }
 });
 
-// the start overlay doubles as the pause screen once a run is underway
 el.startBtn.addEventListener('click', () => (runActive ? resumeGame() : startGame()));
 el.start.addEventListener('click', (e) => {
   if (e.target !== el.startBtn) (runActive ? resumeGame() : startGame());
@@ -1011,6 +1730,8 @@ document.getElementById('restartBtn').addEventListener('click', startGame);
 addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  vmCamera.aspect = camera.aspect;
+  vmCamera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
   bloom.setSize(window.innerWidth, window.innerHeight);
@@ -1018,66 +1739,84 @@ addEventListener('resize', () => {
 
 let elapsed = 0;
 
+// One tick of simulation, kept separate from the render driver so it can also be
+// stepped deterministically.
+function step(dt) {
+  // bullet time slows the world hard and the player only somewhat; aiming stays
+  // at full speed because it is driven by raw mouse input
+  updateSlowmo(dt);
+  const wdt = slowmo.active ? dt * SLOW.world : dt;
+  const pdt = slowmo.active ? dt * SLOW.player : dt;
+  elapsed += wdt;
+
+  updatePlayer(pdt);
+  updateWaves(wdt);
+  updateEnemies(wdt, elapsed);
+  updateShots(wdt);
+  updatePedestals(wdt, elapsed);
+  updatePickups(wdt, elapsed);
+
+  loadout.cooldown -= pdt;
+  if (loadout.reloading > 0) {
+    loadout.reloading -= pdt;
+    if (loadout.reloading <= 0) {
+      loadout.pistol.ammo = WEAPONS.pistol.mag;
+      updateHUD();
+    }
+  }
+  if (triggerHeld && (activeWeapon().auto || !triggerConsumed)) {
+    triggerConsumed = true;
+    fire();
+  }
+
+  if (flashTimer > 0) {
+    flashTimer -= dt;
+    if (flashTimer <= 0) muzzleFlash.visible = false;
+  }
+  if (hitFlashT > 0) {
+    hitFlashT -= dt;
+    el.hitFlash.style.opacity = Math.max(0, hitFlashT / 0.35);
+  }
+  if (hitmarkerT > 0) {
+    hitmarkerT -= dt;
+    if (hitmarkerT <= 0) el.crosshair.style.transform = 'translate(-50%, -50%) scale(1)';
+  }
+
+  el.slowFill.style.width = `${slowmo.energy * 100}%`;
+  el.slowFill.classList.toggle('depleted', slowmo.energy < SLOW.minToStart);
+
+  for (const t of tracers) {
+    if (t.life > 0) {
+      t.life -= dt;
+      t.mesh.material.opacity = clamp(t.life / t.max, 0, 1);
+      if (t.life <= 0) t.mesh.visible = false;
+    }
+  }
+
+  updateParticles(wdt);
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if (!running) {
-    // slow orbit of the arena behind the title screen (a paused run holds its view)
+  if (running) {
+    step(dt);
+  } else {
     if (!runActive) {
       elapsed += dt;
       camera.position.set(Math.cos(elapsed * 0.12) * 22, 6.5, Math.sin(elapsed * 0.12) * 22);
       camera.lookAt(0, 3.5, 0);
     }
-  } else {
-    elapsed += dt;
-
-    updatePlayer(dt);
-    updateWaves(dt);
-    updateEnemies(dt, elapsed);
-    updatePickups(dt, elapsed);
-
-    weapon.cooldown -= dt;
-    if (weapon.reloading > 0) {
-      weapon.reloading -= dt;
-      if (weapon.reloading <= 0) {
-        const need = WEAPON.magSize - weapon.ammo;
-        const take = Math.min(need, weapon.reserve);
-        weapon.ammo += take;
-        weapon.reserve -= take;
-        updateHUD();
-      }
-    }
-    if (firing) fire();
-
-    // muzzle flash decay
-    if (flashTimer > 0) {
-      flashTimer -= dt;
-      if (flashTimer <= 0) { muzzleFlash.visible = false; muzzleLight.intensity = 0; }
-    }
-
-    // screen effects
-    if (hitFlashT > 0) {
-      hitFlashT -= dt;
-      el.hitFlash.style.opacity = Math.max(0, hitFlashT / 0.35);
-    }
-    if (hitmarkerT > 0) {
-      hitmarkerT -= dt;
-      if (hitmarkerT <= 0) el.crosshair.style.transform = 'translate(-50%, -50%) scale(1)';
-    }
-
-    for (const t of tracers) {
-      if (t.life > 0) {
-        t.life -= dt;
-        t.mesh.material.opacity = clamp(t.life / 0.06, 0, 1);
-        if (t.life <= 0) t.mesh.visible = false;
-      }
-    }
+    updateParticles(dt);
   }
-
-  updateParticles(dt);
   composer.render();
 }
 
+// stand the body at the spawn point so it isn't left at the origin behind the menu
+playerRig.root.position.set(player.pos.x, 0, player.pos.z);
+
+refreshGunModel();
 updateHUD();
 animate();
+

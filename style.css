@@ -29,57 +29,111 @@ canvas { display: block; }
 #crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
 #crosshair::after { top: 9px; left: 0; height: 2px; width: 20px; }
 
-#hud {
-  position: fixed; inset: 0;
-  pointer-events: none;
+/* ------------------------------------------------ bottom-left status cluster */
+
+#statusPanel {
+  position: fixed;
+  bottom: 22px; left: 22px;
   z-index: 15;
-  padding: 24px;
+  pointer-events: none;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  gap: 7px;
+  padding: 14px 18px 13px;
+  min-width: 290px;
+  background: linear-gradient(135deg, rgba(12, 4, 28, .72), rgba(6, 2, 16, .5));
+  border-left: 2px solid rgba(77, 252, 255, .75);
+  box-shadow: -4px 0 18px -6px rgba(77, 252, 255, .5), inset 0 0 26px rgba(77, 252, 255, .05);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
 }
 
-#healthWrap {
+#statusPanel .row {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-#healthLabel {
+  gap: 9px;
+  font-size: 12px;
   font-weight: 700;
-  color: #ff3fb0;
-  text-shadow: 0 0 8px #ff3fb0;
   letter-spacing: 2px;
-  font-size: 14px;
-}
-#healthBar {
-  width: 220px; height: 18px;
-  border: 2px solid #ff3fb0;
-  box-shadow: 0 0 10px rgba(255, 63, 176, .6), inset 0 0 8px rgba(255,63,176,.3);
-  background: rgba(255, 63, 176, .08);
-  position: relative;
-  clip-path: polygon(0 0, 100% 0, 96% 100%, 0% 100%);
-}
-#healthFill {
-  height: 100%;
-  width: 100%;
-  background: linear-gradient(90deg, #ff3fb0, #ff8fd4);
-  box-shadow: 0 0 12px #ff3fb0;
-  transition: width .2s ease;
 }
 
-#ammoWrap {
-  position: fixed;
-  bottom: 24px; right: 24px;
-  font-size: 28px;
-  font-weight: 700;
+#statusPanel .tag { width: 46px; flex: none; }
+.tag.hp   { color: #ff3fb0; text-shadow: 0 0 8px #ff3fb0; }
+.tag.slow { color: #9d4dff; text-shadow: 0 0 8px #9d4dff; }
+.tag.wave { color: #ffd24d; text-shadow: 0 0 8px #ffd24d; width: auto; }
+
+#statusPanel .bar {
+  flex: 1;
+  height: 13px;
+  position: relative;
+  clip-path: polygon(0 0, 100% 0, 97% 100%, 0% 100%);
+}
+.bar.hpBar {
+  border: 1px solid rgba(255, 63, 176, .85);
+  background: rgba(255, 63, 176, .1);
+  box-shadow: 0 0 9px rgba(255, 63, 176, .45);
+}
+.bar.slowBar {
+  border: 1px solid rgba(157, 77, 255, .85);
+  background: rgba(157, 77, 255, .1);
+  box-shadow: 0 0 9px rgba(157, 77, 255, .45);
+}
+
+#healthFill {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, #ff3fb0, #ff8fd4);
+  box-shadow: 0 0 11px #ff3fb0;
+  transition: width .18s ease;
+}
+#slowFill {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, #7b2fff, #c79bff);
+  box-shadow: 0 0 11px #9d4dff;
+}
+#slowFill.depleted { background: linear-gradient(90deg, #4a2a6b, #6d4d8f); box-shadow: none; }
+
+#healthNum {
+  width: 34px;
+  text-align: right;
+  color: #ff8fd4;
+  text-shadow: 0 0 7px #ff3fb0;
+}
+#statusPanel .key {
+  width: 34px;
+  text-align: right;
+  color: rgba(199, 155, 255, .85);
+  font-size: 11px;
+}
+
+.weaponRow {
+  margin-top: 3px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(77, 252, 255, .18);
+  justify-content: space-between;
+}
+#weaponName {
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 3px;
   color: #4dfcff;
   text-shadow: 0 0 10px #4dfcff;
+  transition: color .2s ease, text-shadow .2s ease;
 }
-#ammoReserve { color: rgba(77, 252, 255, .5); font-size: 18px; }
+#weaponName.special { color: #ffd24d; text-shadow: 0 0 10px #ffd24d, 0 0 26px #ff8f00; }
+#ammoBlock { font-size: 22px; font-weight: 700; color: #4dfcff; text-shadow: 0 0 9px #4dfcff; }
+#ammoBlock.special { color: #ffd24d; text-shadow: 0 0 9px #ffd24d; }
+#ammoBlock.low { color: #ff5a5a; text-shadow: 0 0 9px #ff5a5a; animation: blink .55s steps(2, end) infinite; }
+#ammoSep, #ammoReserve { font-size: 13px; opacity: .55; }
+
+@keyframes blink { 50% { opacity: .35; } }
+
+.waveRow { gap: 8px; font-size: 12px; }
+#wave { color: #ffd24d; text-shadow: 0 0 8px #ffd24d; font-weight: 700; }
 
 #scoreWrap {
   position: fixed;
-  top: 24px; right: 24px;
+  top: 22px; right: 24px;
+  z-index: 15;
+  pointer-events: none;
   font-size: 16px;
   font-weight: 700;
   color: #b6ff4d;
@@ -87,15 +141,28 @@ canvas { display: block; }
   letter-spacing: 2px;
 }
 
-#waveWrap {
+#pickupToast {
   position: fixed;
-  bottom: 24px; left: 24px;
-  font-size: 16px;
+  bottom: 190px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  pointer-events: none;
+  font-size: 15px;
   font-weight: 700;
+  letter-spacing: 3px;
   color: #ffd24d;
-  text-shadow: 0 0 8px #ffd24d;
-  letter-spacing: 2px;
+  text-shadow: 0 0 10px #ffd24d, 0 0 30px #ff8f00;
+  opacity: 0;
 }
+#pickupToast.show { animation: toast 1.5s ease forwards; }
+@keyframes toast {
+  0% { opacity: 0; transform: translate(-50%, 14px); }
+  18% { opacity: 1; transform: translate(-50%, 0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ------------------------------------------------ full-screen effects */
 
 #hitFlash {
   position: fixed; inset: 0;
@@ -113,6 +180,18 @@ canvas { display: block; }
   transition: box-shadow .3s ease;
 }
 
+#slowVignette {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 14;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, rgba(120, 60, 255, 0) 35%, rgba(120, 60, 255, .3) 100%);
+  transition: opacity .18s ease;
+}
+#slowVignette.active { opacity: 1; }
+
+/* ------------------------------------------------ overlays */
+
 .overlay {
   position: fixed; inset: 0;
   z-index: 50;
@@ -122,12 +201,12 @@ canvas { display: block; }
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 18px;
+  gap: 16px;
 }
 .overlay.hidden { display: none; }
 
 .overlay h1 {
-  font-size: 64px;
+  font-size: 62px;
   font-weight: 900;
   letter-spacing: 6px;
   color: #4dfcff;
@@ -149,12 +228,13 @@ h1.gameover {
   font-size: 15px;
   letter-spacing: 1px;
 }
+.subtitle.small { font-size: 12px; color: rgba(232, 246, 255, .5); max-width: 460px; }
 
 .controls {
   display: grid;
   grid-template-columns: repeat(3, auto);
   gap: 10px 34px;
-  margin: 10px 0;
+  margin: 6px 0;
   font-size: 13px;
   color: rgba(232, 246, 255, .8);
 }

@@ -47,12 +47,15 @@ reaparecen a los 25 segundos.
 
 ## Enemigos
 
-| Tipo | Color | Vida | Comportamiento | Puntos |
-|---|---|---|---|---|
-| Thug | Magenta | 45 | Va a por ti cuerpo a cuerpo | 100 |
-| Runner | Cian | 22 | Rápido y frágil, te desborda | 150 |
-| Gunner | Lima | 34 | Mantiene 15 m y dispara proyectiles esquivables | 220 |
-| Brute | Naranja | 125 | Lento y muy duro, pega fortísimo | 320 |
+| Tipo | Color | Vida | Arma | Comportamiento | Puntos |
+|---|---|---|---|---|---|
+| Thug | Magenta | 45 | Porra eléctrica | Va a por ti cuerpo a cuerpo | 100 |
+| Runner | Cian | 22 | Cuchillo | Rápido y frágil, te desborda | 150 |
+| Gunner | Lima | 34 | Rifle | Mantiene 15 m y dispara proyectiles esquivables | 220 |
+| Brute | Naranja | 125 | Mazo | Lento y muy duro, pega fortísimo | 320 |
+
+Todos suben rampas y cajas persiguiéndote, así que ningún sitio del mapa es
+seguro por altura.
 
 Los gunners aparecen a partir de la oleada 2 y los brutes de la 4. Al morir
 sueltan orbes: verde cura 25 PV, morado recarga media barra de cámara lenta.
@@ -71,11 +74,25 @@ puede reactivar.
 - `main.js` — todo el juego: arena, física, personajes, IA, armas, partículas,
   oleadas y audio.
 
+## El mapa
+
+Arena de 104×104 m con plataforma central elevada y rampas, cuatro reductos en
+las esquinas, escaleras de cajas y pilares que cortan las líneas de tiro. Las
+alturas están escalonadas: un salto sube una caja de 1,15 m, los bordes de menos
+de 0,65 m se suben andando, y toda azotea es alcanzable encadenando cajas o
+subiendo una rampa.
+
 ### Detalles de implementación
 
 - **Rig humanoide compartido** (`buildHumanoid`): un único constructor genera
-  tanto tu cuerpo en primera persona como los cuatro enemigos, con las
-  extremidades colgando de pivotes en la articulación para animar el paso.
+  tanto tu cuerpo en primera persona como los cuatro enemigos — torso cónico,
+  cabeza y articulaciones esféricas, y brazos y piernas de dos segmentos que
+  doblan por codo y rodilla. La geometría se cachea por silueta y se comparte
+  entre todas las instancias de un tipo; sólo los materiales son por personaje,
+  para poder hacer parpadear a uno al recibir un impacto.
+- **Colisión con cajas AABB**: las rampas no tienen volumen propio, se aproximan
+  con una escalera de peldaños más bajos que el asistente de escalón, de modo
+  que todo el mundo (jugador y enemigos) las sube andando.
 - **Arma en cámara propia**: el viewmodel se renderiza en una capa aparte con su
   propio `PerspectiveCamera` a 55° y limpieza de profundidad, para que no se
   deforme con el FOV de 78° del mundo ni lo recorte tu propio torso.

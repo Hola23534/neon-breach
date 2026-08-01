@@ -7,12 +7,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ---------------------------------------------------------------- constants
 
-const ARENA = 34;          // half-extent of the playable floor
-const WALL_H = 9;
+const ARENA = 52;          // half-extent of the playable floor
+const WALL_H = 11;
 const EYE_H = 1.7;
 const PLAYER_R = 0.45;
 const GRAVITY = 24;
-const JUMP_V = 8.2;
+const JUMP_V = 8.4;        // clears a 1.15 m crate in a single hop
+const STEP_UP = 0.65;      // ledges up to this are walked over, no jump needed
 const WALK = 7.4;
 const SPRINT = 11.6;
 
@@ -197,7 +198,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x0a0316, 0.019);
+scene.fog = new THREE.FogExp2(0x0a0316, 0.013);   // thinner, the arena is large
 
 const BASE_FOV = 78;
 const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.01, 500);
@@ -320,26 +321,124 @@ addBlock(0,  WALL_H / 2,  ARENA + 0.5, ARENA * 2 + 2, WALL_H, 1, 0x4dfcff);
 addBlock(-ARENA - 0.5, WALL_H / 2, 0, 1, WALL_H, ARENA * 2 + 2, 0xff3fb0);
 addBlock( ARENA + 0.5, WALL_H / 2, 0, 1, WALL_H, ARENA * 2 + 2, 0xff3fb0);
 
-for (let i = 0; i < 18; i++) {
-  const a = rand() * Math.PI * 2;
-  const r = 7 + rand() * (ARENA - 11);
-  const w = 2 + rand() * 4;
-  const h = 1.6 + rand() * 5;
-  const d = 2 + rand() * 4;
-  addBlock(Math.cos(a) * r, h / 2, Math.sin(a) * r, w, h, d, NEON[(rand() * NEON.length) | 0]);
+// A ramp is a thin box rotated about X. It gets no collision volume of its own —
+// the stepper below walks the player up it, which keeps the collision model to
+// pure axis-aligned boxes.
+function addRamp(x, y, z, w, len, rise, rotY, neon) {
+  const angle = Math.atan2(rise, len);
+  const geo = new THREE.BoxGeometry(w, 0.25, Math.hypot(len, rise));
+  const mesh = new THREE.Mesh(geo, wallMat);
+  mesh.position.set(x, y, z);
+  mesh.rotation.order = 'YXZ';
+  mesh.rotation.y = rotY;
+  // +angle drops the far (+Z) end and lifts the near one, so the slope climbs
+  // toward whatever the ramp is leaning against
+  mesh.rotation.x = angle;
+  scene.add(mesh);
+  solids.push(mesh);
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: neon })
+  );
+  edges.position.copy(mesh.position);
+  edges.rotation.copy(mesh.rotation);
+  scene.add(edges);
+
+  // Approximate the slope with a stack of steps for collision, each one shorter
+  // than STEP_UP so both the player and the enemies walk up without jumping. The
+  // tallest step is the one nearest the structure the ramp serves.
+  const steps = Math.max(2, Math.round(rise / 0.42));
+  for (let i = 0; i < steps; i++) {
+    const t = (i + 0.5) / steps;
+    const h = (rise * (steps - i)) / steps;
+    const along = (t - 0.5) * len;
+    obstacles.push({
+      box: new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(x + Math.sin(rotY) * along, h / 2, z + Math.cos(rotY) * along),
+        new THREE.Vector3(
+          Math.abs(Math.cos(rotY)) * w + Math.abs(Math.sin(rotY)) * (len / steps),
+          h,
+          Math.abs(Math.cos(rotY)) * (len / steps) + Math.abs(Math.sin(rotY)) * w
+        )
+      ),
+    });
+  }
 }
 
-addBlock(0, 4, 0, 3, 8, 3, 0xb6ff4d);
+// Hand-built layout. Heights come in tiers the player can actually work up:
+// STEP is a single hop, and everything taller is reachable by chaining crates
+// or taking a ramp, so no piece of cover is a dead end.
+const STEP = 1.15;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+// four corner strongholds: a low crate you can hop onto, feeding a taller one
+for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+  const cx = sx * 30, cz = sz * 30;
+  addBlock(cx, STEP / 2, cz, 7, STEP, 7, 0x4dfcff);
+  addBlock(cx + sx * 5.5, STEP * 1.6, cz + sz * 5.5, 5, STEP * 3.2, 5, 0xff3fb0);
+  addBlock(cx - sx * 6, STEP * 0.35, cz - sz * 6, 4, STEP * 0.7, 4, 0xb6ff4d);
+}
+
+// central raised platform with ramps up two opposite sides
+const PLAT_H = 2.6;
+addBlock(0, PLAT_H / 2, 0, 16, PLAT_H, 16, 0xb6ff4d);
+addRamp(0, PLAT_H / 2 - 0.1, 13.5, 6, 11, PLAT_H, 0, 0xb6ff4d);
+addRamp(0, PLAT_H / 2 - 0.1, -13.5, 6, 11, PLAT_H, Math.PI, 0xb6ff4d);
+// a tower on the platform for long sightlines
+addBlock(0, PLAT_H + 2.4, 0, 4, 4.8, 4, 0xffd24d);
+
+// mid-field cover: staircases of three crates so every roof is reachable
+const STAIRS = [
+  [-17, 6, 0], [17, -6, Math.PI], [7, 19, Math.PI / 2], [-7, -19, -Math.PI / 2],
+];
+for (const [x, z, rot] of STAIRS) {
+  for (let i = 0; i < 3; i++) {
+    const h = STEP * (i + 1);
+    const ox = Math.cos(rot) * i * 3.2;
+    const oz = Math.sin(rot) * i * 3.2;
+    addBlock(x + ox, h / 2, z + oz, 3, h, 3, NEON[i % NEON.length]);
+  }
+}
+
+// scattered low blocks for quick cover, placed off the fixed layout
+for (let i = 0; i < 14; i++) {
+  const a = rand() * Math.PI * 2;
+  const r = 13 + rand() * (ARENA - 20);
+  const x = Math.cos(a) * r;
+  const z = Math.sin(a) * r;
+  if (Math.abs(x) < 11 && Math.abs(z) < 11) continue;    // keep the platform clear
+  const h = STEP * (0.6 + rand() * 1.6);
+  addBlock(x, h / 2, z, 2.5 + rand() * 3, h, 2.5 + rand() * 3, NEON[(rand() * NEON.length) | 0]);
+}
+
+// tall pillars purely to break sightlines
+for (const [x, z] of [[-24, -8], [24, 8], [9, -25], [-9, 25]]) {
+  addBlock(x, 3.5, z, 2.4, 7, 2.4, 0x9d4dff);
+}
 
 // ---------------------------------------------------------------- humanoid rig
 
 // Every character in the game — the player's own body and all four enemy types —
-// is built from this one rig. Limbs hang off pivot groups placed at the joint so
-// rotating the pivot swings the limb from the shoulder or hip.
+// comes out of this one rig: a tapered torso, spherical head and joints, and
+// two-segment arms and legs that bend at the elbow and knee. Shapes are kept
+// low-poly on purpose and outlined with EdgesGeometry above a 24° threshold, so
+// only the silhouette-defining facets light up and the characters still read as
+// part of the same neon-wireframe world as the arena.
+//
+// Geometry is cached per silhouette and shared across every instance of a type;
+// only the three materials are per-character, so a hit flash can recolour one
+// enemy without touching the rest.
+const rigGeoCache = new Map();
+
+function getRigGeometry(key, build) {
+  let geo = rigGeoCache.get(key);
+  if (!geo) { geo = build(); rigGeoCache.set(key, geo); }
+  return geo;
+}
+
 function buildHumanoid(cfg) {
-  const { height, jacket, trim, accent, bulk = 1 } = cfg;
+  const { height: H, jacket, trim, accent, bulk = 1, key = 'x' } = cfg;
+  const B = bulk;
 
   const mats = {
     body: new THREE.MeshBasicMaterial({ color: jacket }),
@@ -347,92 +446,189 @@ function buildHumanoid(cfg) {
     accent: new THREE.MeshBasicMaterial({ color: accent }),
   };
 
-  const root = new THREE.Group();
-  const u = height / 1.75;             // scale everything off a 1.75m reference
-  const shoulderW = 0.40 * u * bulk;
+  const cache = (name, build) => getRigGeometry(`${key}:${name}`, build);
 
-  function slab(w, h, d, mat) {
-    const geo = new THREE.BoxGeometry(w, h, d);
+  // a solid dark shape wearing a neon outline
+  function piece(geo, mat) {
     const mesh = new THREE.Mesh(geo, mat || mats.body);
-    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), mats.edge));
+    mesh.add(new THREE.LineSegments(
+      getRigGeometry(`edges:${geo.uuid}`, () => new THREE.EdgesGeometry(geo, 24)),
+      mats.edge
+    ));
     return mesh;
   }
 
-  // a limb hangs downward from a pivot placed at the joint
-  function limb(w, h, d, jointX, jointY) {
-    const pivot = new THREE.Group();
-    pivot.position.set(jointX, jointY, 0);
-    const mesh = slab(w, h, d);
-    mesh.position.y = -h / 2;
-    pivot.add(mesh);
-    root.add(pivot);
-    return pivot;
-  }
+  const capsule = (name, r, len) =>
+    cache(name, () => new THREE.CapsuleGeometry(r, len, 2, 6));
+  const ball = (name, r) =>
+    cache(name, () => new THREE.IcosahedronGeometry(r, 0));
 
-  // Proportions are anchored so the model actually reaches `height`: hips at
-  // half, shoulders at 0.785, top of the skull at 1.0. Getting this wrong makes
-  // enemies shorter than declared and eye-level shots sail over their heads.
-  const hipY = 0.50 * height;
-  const chestH = 0.30 * height;
-  const shoulderY = 0.785 * height;
-  const headSize = 0.15 * height;
-  const headY = height - headSize * 0.5;
+  const root = new THREE.Group();
 
-  const torso = slab(shoulderW * 1.05, chestH, 0.24 * u * bulk);
-  torso.position.y = hipY + chestH / 2;
+  // anchored so the model genuinely reaches H: hips at half, top of skull at 1.0
+  const hipY = 0.50 * H;
+  const chestTopY = 0.80 * H;
+  const shoulderY = 0.78 * H;
+  const headR = 0.075 * H;
+  const headY = H - headR;
+  const headSize = headR * 2;
+
+  const shoulderX = 0.115 * H * B;
+  const hipX = 0.068 * H * B;
+  const upperArm = 0.155 * H, foreArm = 0.155 * H, armR = 0.035 * H * B;
+  const thigh = 0.245 * H, shin = 0.245 * H, legR = 0.050 * H * B;
+
+  // ---- torso: a tapered barrel, squashed front-to-back so it isn't a tube
+  const torsoH = chestTopY - hipY;
+  const torso = piece(cache('torso', () => {
+    const g = new THREE.CylinderGeometry(0.135 * H * B, 0.100 * H * B, torsoH, 8, 1);
+    g.scale(1, 1, 0.66);
+    return g;
+  }));
+  torso.position.y = hipY + torsoH / 2;
   root.add(torso);
 
-  const hips = slab(shoulderW * 0.85, 0.10 * height, 0.22 * u * bulk);
-  hips.position.y = hipY;
-  root.add(hips);
+  const pelvis = piece(cache('pelvis', () => {
+    const g = new THREE.IcosahedronGeometry(0.098 * H * B, 0);
+    g.scale(1, 0.78, 0.72);
+    return g;
+  }));
+  pelvis.position.y = hipY;
+  root.add(pelvis);
 
-  // jacket detail: a lit collar and two chest stripes, the parts bloom picks up
-  const collar = new THREE.Mesh(
-    new THREE.BoxGeometry(shoulderW * 1.1, 0.028 * height, 0.26 * u * bulk),
-    mats.accent
-  );
-  collar.position.y = hipY + chestH - 0.02 * height;
-  root.add(collar);
+  // ---- head on a short neck, with a lit visor across the face (-Z is forward)
+  const neck = piece(capsule('neck', 0.035 * H, 0.05 * H));
+  neck.position.y = chestTopY + 0.025 * H;
+  root.add(neck);
 
-  // characters face -Z, matching the camera's default forward
-  for (const side of [-1, 1]) {
-    const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.022 * height, chestH * 0.62, 0.02),
-      mats.accent
-    );
-    stripe.position.set(side * shoulderW * 0.3, hipY + chestH * 0.5, -0.125 * u * bulk);
-    root.add(stripe);
-  }
-
-  const legH = hipY;
-  const legL = limb(0.13 * u * bulk, legH, 0.15 * u, -shoulderW * 0.29, hipY);
-  const legR = limb(0.13 * u * bulk, legH, 0.15 * u,  shoulderW * 0.29, hipY);
-
-  const armH = 0.32 * height;
-  const armL = limb(0.10 * u * bulk, armH, 0.11 * u, -shoulderW * 0.66, shoulderY);
-  const armR = limb(0.10 * u * bulk, armH, 0.11 * u,  shoulderW * 0.66, shoulderY);
-
-  const head = slab(headSize * 0.86, headSize, headSize * 0.86);
+  const head = piece(cache('head', () => {
+    const g = new THREE.IcosahedronGeometry(headR, 1);
+    g.scale(0.92, 1, 0.92);
+    return g;
+  }));
   head.position.y = headY;
   root.add(head);
 
-  // glowing visor across the face — reads as "who is this" at a glance
   const visor = new THREE.Mesh(
-    new THREE.BoxGeometry(headSize * 0.76, headSize * 0.26, 0.012),
+    cache('visor', () => {
+      const g = new THREE.SphereGeometry(headR * 0.94, 10, 6, 0, Math.PI, 1.15, 0.62);
+      g.rotateY(Math.PI / 2);
+      return g;
+    }),
     mats.accent
   );
-  visor.position.set(0, headSize * 0.08, -headSize * 0.45);
   head.add(visor);
 
-  return { root, mats, torso, head, hips, legL, legR, armL, armR, headY, headSize, shoulderY, height };
+  // ---- limbs: pivot at the joint, segment hanging below it, joint ball on top
+  function segment(parent, r, len, name) {
+    const pivot = new THREE.Group();
+    const mesh = piece(capsule(name, r, len));
+    mesh.position.y = -len / 2;
+    pivot.add(mesh);
+    pivot.add(piece(ball(name + 'Joint', r * 1.15)));
+    parent.add(pivot);
+    return pivot;
+  }
+
+  function arm(side) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * shoulderX, shoulderY, 0);
+    root.add(shoulder);
+
+    const upper = segment(shoulder, armR, upperArm, 'upperArm');
+    const elbow = new THREE.Group();
+    elbow.position.y = -upperArm;
+    upper.add(elbow);
+    segment(elbow, armR * 0.88, foreArm, 'foreArm');
+
+    const hand = piece(ball('hand', armR * 1.5));
+    hand.position.y = -foreArm - armR * 0.5;
+    elbow.add(hand);
+
+    return { shoulder, elbow, hand };
+  }
+
+  function leg(side) {
+    const hip = new THREE.Group();
+    hip.position.set(side * hipX, hipY, 0);
+    root.add(hip);
+
+    const upper = segment(hip, legR, thigh, 'thigh');
+    const knee = new THREE.Group();
+    knee.position.y = -thigh;
+    upper.add(knee);
+    segment(knee, legR * 0.82, shin, 'shin');
+
+    const foot = piece(cache('foot', () =>
+      new THREE.BoxGeometry(0.062 * H * B, 0.032 * H, 0.135 * H)));
+    foot.position.set(0, -shin - 0.014 * H, -0.028 * H);
+    knee.add(foot);
+
+    return { hip, knee, foot };
+  }
+
+  const armL = arm(-1), armR_ = arm(1);
+  const legL = leg(-1), legR_ = leg(1);
+
+  // ---- jacket detail, all on the -Z front face
+  const collar = new THREE.Mesh(
+    cache('collar', () => {
+      const g = new THREE.TorusGeometry(0.10 * H * B, 0.016 * H, 5, 10);
+      g.rotateX(Math.PI / 2);
+      g.scale(1, 1, 0.7);
+      return g;
+    }),
+    mats.accent
+  );
+  collar.position.y = chestTopY - 0.012 * H;
+  root.add(collar);
+
+  for (const side of [-1, 1]) {
+    const stripe = new THREE.Mesh(
+      cache('stripe', () => new THREE.BoxGeometry(0.018 * H, torsoH * 0.55, 0.014 * H)),
+      mats.accent
+    );
+    stripe.position.set(side * 0.055 * H * B, hipY + torsoH * 0.52, -0.088 * H * B);
+    root.add(stripe);
+  }
+
+  return {
+    root, mats, torso, head, pelvis, visor,
+    shoulderL: armL.shoulder, elbowL: armL.elbow, handL: armL.hand,
+    shoulderR: armR_.shoulder, elbowR: armR_.elbow, handR: armR_.hand,
+    hipL: legL.hip, kneeL: legL.knee,
+    hipR: legR_.hip, kneeR: legR_.knee,
+    headY, headSize, shoulderY, height: H,
+  };
 }
 
-function animateHumanoid(rig, phase, amount) {
-  const swing = Math.sin(phase) * amount;
-  rig.legL.rotation.x = swing;
-  rig.legR.rotation.x = -swing;
-  rig.armL.rotation.x = -swing * 0.65;
-  rig.armR.rotation.x = swing * 0.65;
+// A two-segment walk cycle: thighs swing opposite each other, the knee folds on
+// the back half of the stride, and the arms counter-swing. `aim` overrides the
+// right arm so a character can hold a weapon out while still walking.
+function animateHumanoid(rig, phase, amount, aim = 0, swingArc = 0) {
+  const s = Math.sin(phase);
+
+  rig.hipL.rotation.x = s * amount;
+  rig.hipR.rotation.x = -s * amount;
+  rig.kneeL.rotation.x = -Math.max(0, -s) * amount * 1.1;
+  rig.kneeR.rotation.x = -Math.max(0, s) * amount * 1.1;
+
+  rig.shoulderL.rotation.x = -s * amount * 0.6;
+  rig.elbowL.rotation.x = -0.25 - Math.abs(s) * 0.25;
+
+  if (swingArc > 0) {
+    // melee arc: wind up over the shoulder, then chop down
+    rig.shoulderR.rotation.x = 2.2 - swingArc * 7.5;
+    rig.elbowR.rotation.x = -0.5;
+  } else if (aim > 0) {
+    rig.shoulderR.rotation.x = aim;
+    rig.elbowR.rotation.x = -0.35;
+    rig.shoulderL.rotation.x = aim * 0.82;
+    rig.elbowL.rotation.x = -0.55;
+  } else {
+    rig.shoulderR.rotation.x = s * amount * 0.6;
+    rig.elbowR.rotation.x = -0.25 - Math.abs(s) * 0.25;
+  }
 }
 
 // ---------------------------------------------------------------- particles
@@ -535,11 +731,13 @@ const BODY_FWD = 0.13;
 // solid neon panel reads beautifully; 30 cm from the lens the same panel is a
 // white blob once bloom hits it, so the player's jacket is dark with lit seams.
 const playerRig = buildHumanoid({
+  key: 'player',
   height: 1.75, jacket: 0x0d1430, trim: 0x64b5ff, accent: 0x1d4f7a,
 });
+// the head would sit inside the camera and the arms belong to the weapon rig
 playerRig.head.visible = false;
-playerRig.armL.visible = false;
-playerRig.armR.visible = false;
+playerRig.shoulderL.visible = false;
+playerRig.shoulderR.visible = false;
 playerRig.torso.scale.z = 0.82;   // slimmer front-to-back so you can see past it
 
 // Police detail. Looking straight down mostly shows the TOP of the torso, so the
@@ -554,14 +752,13 @@ playerRig.torso.scale.z = 0.82;   // slimmer front-to-back so you can see past i
     return m;
   };
 
-  for (const side of [-1, 1]) {
-    add(new THREE.BoxGeometry(0.13, 0.055, 0.20), 0x1c2c60, side * 0.165, 1.375, 0);
+  for (const side of [-1, 1]) {   // shoulder pads, the part you see looking down
+    add(new THREE.BoxGeometry(0.115, 0.05, 0.185), 0x1c2c60, side * 0.145, 1.365, 0);
   }
 
-  add(new THREE.BoxGeometry(0.20, 0.07, 0.17), 0x1c2c60, 0, 1.40, 0.01);   // raised collar
-  add(new THREE.BoxGeometry(0.40, 0.05, 0.24), 0x1c2c60, 0, 0.875, 0);     // duty belt
+  add(new THREE.CylinderGeometry(0.145, 0.145, 0.055, 8), 0x1c2c60, 0, 0.875, 0);  // duty belt
 
-  const badge = add(new THREE.BoxGeometry(0.06, 0.06, 0.02), 0x8a6a10, -0.13, 1.26, -0.10);
+  const badge = add(new THREE.BoxGeometry(0.055, 0.055, 0.02), 0x8a6a10, -0.10, 1.25, -0.10);
   badge.rotation.z = Math.PI / 4;
 }
 scene.add(playerRig.root);
@@ -657,6 +854,15 @@ let flashTimer = 0;
 
 const controls = new PointerLockControls(camera, document.body);
 
+// PointerLockControls rebuilds its YXZ euler from the camera quaternion on every
+// mouse move, and by default lets the pitch reach exactly ±90°. That is the
+// gimbal singularity: at straight up or straight down the yaw is no longer
+// recoverable from the quaternion, so the view snaps to a random heading. Keeping
+// the pitch a few degrees short of vertical avoids it entirely.
+const PITCH_MARGIN = 0.10;
+controls.minPolarAngle = PITCH_MARGIN;
+controls.maxPolarAngle = Math.PI - PITCH_MARGIN;
+
 const player = {
   pos: new THREE.Vector3(0, EYE_H, ARENA - 8),
   vel: new THREE.Vector3(),
@@ -718,7 +924,12 @@ function resolveCollisions(pos, radius, hDown, hUp) {
     const pz = Math.min(pos.z - _min.z, _max.z - pos.z);
 
     if (py <= px && py <= pz) {
-      if (pos.y - _min.y < _max.y - pos.y) {
+      // Pushing under the box is only valid if the body still ends up above the
+      // arena floor. Deep inside a wide block — the middle of the 16 m platform,
+      // say — the shallowest axis is straight down, and taking it would post the
+      // body underground instead of standing it on the roof.
+      const canGoUnder = _min.y - hDown >= 0;
+      if (pos.y - _min.y < _max.y - pos.y && canGoUnder) {
         pos.y = _min.y;
       } else {
         pos.y = _max.y;
@@ -731,6 +942,37 @@ function resolveCollisions(pos, radius, hDown, hUp) {
     }
   }
   return grounded;
+}
+
+function overlapsObstacle(pos, radius, hDown, hUp) {
+  for (const { box } of obstacles) {
+    if (pos.x > box.min.x - radius && pos.x < box.max.x + radius &&
+        pos.y > box.min.y - hUp && pos.y < box.max.y + hDown &&
+        pos.z > box.min.z - radius && pos.z < box.max.z + radius) return true;
+  }
+  return false;
+}
+
+// Walking into a ledge no taller than `maxStep` lifts the body onto it instead of
+// stopping dead. This is what makes the stacked crates and the ramps climbable
+// without giving the collision model anything but axis-aligned boxes to chew on.
+const _probe = new THREE.Vector3();
+function tryStepUp(pos, radius, hDown, hUp, wantX, wantZ, maxStep) {
+  const feetY = pos.y - hDown;
+  let ledge = -Infinity;
+  for (const { box } of obstacles) {
+    if (wantX > box.min.x - radius && wantX < box.max.x + radius &&
+        wantZ > box.min.z - radius && wantZ < box.max.z + radius &&
+        box.max.y > feetY + 0.02 && box.max.y <= feetY + maxStep) {
+      ledge = Math.max(ledge, box.max.y);
+    }
+  }
+  if (ledge === -Infinity) return false;
+
+  const y = ledge + hDown + 0.002;
+  if (overlapsObstacle(_probe.set(wantX, y, wantZ), radius, hDown, hUp)) return false;
+  pos.set(wantX, y, wantZ);
+  return true;
 }
 
 function pointInObstacle(p, pad = 0) {
@@ -780,8 +1022,17 @@ function updatePlayer(dt) {
   player.pos.x = clamp(player.pos.x, -ARENA + PLAYER_R, ARENA - PLAYER_R);
   player.pos.z = clamp(player.pos.z, -ARENA + PLAYER_R, ARENA - PLAYER_R);
 
+  const wantX = player.pos.x, wantZ = player.pos.z;
   if (resolveCollisions(player.pos, PLAYER_R, EYE_H, 0)) {
     if (player.vel.y < 0) player.vel.y = 0;
+    player.onGround = true;
+  }
+
+  // pushed back horizontally? see if it was just a kerb we can walk up
+  const blocked = Math.abs(player.pos.x - wantX) > 1e-4 || Math.abs(player.pos.z - wantZ) > 1e-4;
+  if (blocked && player.vel.y <= 0 &&
+      tryStepUp(player.pos, PLAYER_R, EYE_H, 0, wantX, wantZ, STEP_UP)) {
+    player.vel.y = 0;
     player.onGround = true;
   }
 
@@ -794,7 +1045,7 @@ function updatePlayer(dt) {
   camera.position.y += bobY;
 
   if (shake > 0) {
-    shake = Math.max(0, shake - dt * 3.2);
+    shake = Math.max(0, shake - dt * 4.5);
     camera.position.x += (Math.random() - 0.5) * shake;
     camera.position.y += (Math.random() - 0.5) * shake;
     camera.position.z += (Math.random() - 0.5) * shake;
@@ -905,7 +1156,7 @@ function fire() {
   slot.ammo--;
   loadout.cooldown = w.rate;
   gunRecoil = w.kick;
-  shake = Math.min(0.14, shake + w.shakeAmt);
+  shake = Math.min(0.055, shake + w.shakeAmt * 0.5);
   flashTimer = 0.05;
   muzzleFlash.visible = true;
   muzzleFlash.material.rotation = Math.random() * Math.PI;
@@ -971,9 +1222,56 @@ function fire() {
 
 const enemies = [];
 
+// Each criminal carries something, modelled into the right hand so it swings with
+// the arm: baton, blade, rifle or sledgehammer. Parts point down -Y from the grip
+// because that is how the hand hangs.
+function buildEnemyWeapon(type, def) {
+  const g = new THREE.Group();
+  const dark = new THREE.MeshBasicMaterial({ color: 0x0f0a1c });
+  const edge = new THREE.LineBasicMaterial({ color: def.accent });
+  const hot = new THREE.MeshBasicMaterial({ color: def.accent });
+
+  const part = (geo, mat, x, y, z, rx = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.x = rx;
+    if (mat === dark) {
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 24), edge));
+    }
+    g.add(m);
+    return m;
+  };
+
+  const S = def.height / 1.75;
+
+  if (type === 'thug') {                       // stun baton, held along the forearm
+    part(new THREE.CylinderGeometry(0.022 * S, 0.026 * S, 0.62 * S, 6), dark, 0, -0.24 * S, 0);
+    part(new THREE.CylinderGeometry(0.030 * S, 0.030 * S, 0.10 * S, 6), hot, 0, -0.53 * S, 0);
+  } else if (type === 'runner') {              // short blade angled forward
+    const blade = new THREE.BoxGeometry(0.014 * S, 0.42 * S, 0.055 * S);
+    part(blade, hot, 0, -0.24 * S, -0.05 * S, -0.35);
+    part(new THREE.BoxGeometry(0.036 * S, 0.10 * S, 0.05 * S), dark, 0, -0.05 * S, 0);
+  } else if (type === 'gunner') {
+    // Built along -Y like the melee weapons. The hand's local down axis is what
+    // swings forward when the shoulder pitches up to aim, so a rifle modelled
+    // along Z would end up pointing at the floor.
+    part(new THREE.BoxGeometry(0.075 * S, 0.46 * S, 0.10 * S), dark, 0, -0.26 * S, 0);
+    part(new THREE.CylinderGeometry(0.021 * S, 0.021 * S, 0.34 * S, 6), dark, 0, -0.62 * S, 0);
+    part(new THREE.BoxGeometry(0.055 * S, 0.13 * S, 0.055 * S), dark, 0, -0.10 * S, 0.09 * S);
+    part(new THREE.BoxGeometry(0.05 * S, 0.05 * S, 0.05 * S), hot, 0, -0.40 * S, -0.06 * S);
+  } else {                                     // brute: sledgehammer
+    part(new THREE.CylinderGeometry(0.030 * S, 0.034 * S, 0.95 * S, 6), dark, 0, -0.42 * S, 0);
+    part(new THREE.BoxGeometry(0.30 * S, 0.16 * S, 0.16 * S), dark, 0, -0.88 * S, 0);
+    part(new THREE.BoxGeometry(0.05 * S, 0.17 * S, 0.17 * S), hot, 0.15 * S, -0.88 * S, 0);
+  }
+
+  return g;
+}
+
 function spawnEnemy(type) {
   const def = ENEMY_TYPES[type];
   const rig = buildHumanoid({
+    key: type,
     height: def.height, jacket: def.jacket, trim: def.trim,
     accent: def.accent, bulk: def.bulk || 1,
   });
@@ -982,46 +1280,39 @@ function spawnEnemy(type) {
   group.add(rig.root);
   group.add(glowSprite(def.accent, def.height * 1.5, 0.32));
 
+  rig.handR.add(buildEnemyWeapon(type, def));
+
   // Two hitboxes: a generous body covering feet to shoulders, and a tight head
   // worth double. The head is deliberately no bigger than the skull so landing
-  // one still takes aim.
+  // one still takes aim. Both geometries are cached per type.
   const bodyTop = rig.headY - rig.headSize * 0.5;
   const hitBody = new THREE.Mesh(
-    new THREE.BoxGeometry(def.radius * 2.1, bodyTop, def.radius * 1.7),
+    getRigGeometry(`${type}:hitBody`,
+      () => new THREE.BoxGeometry(def.radius * 2.1, bodyTop, def.radius * 1.7)),
     new THREE.MeshBasicMaterial({ visible: false })
   );
   hitBody.position.y = bodyTop / 2;
   group.add(hitBody);
 
   const hitHead = new THREE.Mesh(
-    new THREE.BoxGeometry(rig.headSize, rig.headSize, rig.headSize),
+    getRigGeometry(`${type}:hitHead`,
+      () => new THREE.BoxGeometry(rig.headSize, rig.headSize, rig.headSize)),
     new THREE.MeshBasicMaterial({ visible: false })
   );
   hitHead.position.y = rig.headY;
   group.add(hitHead);
 
-  // give the gunner something to shoot with
-  if (def.ranged) {
-    const weapon = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.09, 0.42),
-      new THREE.MeshBasicMaterial({ color: 0x1a1a08 })
-    );
-    weapon.position.set(def.radius * 0.7, rig.shoulderY - def.height * 0.20, -0.22);
-    weapon.add(new THREE.LineSegments(
-      new THREE.EdgesGeometry(weapon.geometry),
-      new THREE.LineBasicMaterial({ color: def.accent })
-    ));
-    group.add(weapon);
-    rig.weapon = weapon;
-  }
-
   let x, z, tries = 0;
   do {
     const a = Math.random() * Math.PI * 2;
-    const r = ARENA - 4 - Math.random() * 8;
+    const r = ARENA - 4 - Math.random() * 10;
     x = Math.cos(a) * r; z = Math.sin(a) * r;
     tries++;
-  } while (tries < 24 && Math.hypot(x - player.pos.x, z - player.pos.z) < 18);
+  } while (tries < 24 && Math.hypot(x - player.pos.x, z - player.pos.z) < 20);
+
+  // never drop one inside a block — the collision resolver would have to shove it
+  // out, and from deep inside a wide block there is no good direction to shove
+  [x, z] = clearSpot(x, z);
 
   group.position.set(x, 0, z);
   scene.add(group);
@@ -1031,8 +1322,9 @@ function spawnEnemy(type) {
     hp: def.hp, maxHp: def.hp,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * 6,
+    velY: 0,
     attackCd: 0.6 + Math.random() * 0.8,
-    flash: 0, spawnT: 0.55, dying: 0,
+    flash: 0, spawnT: 0.55, dying: 0, swing: 0,
   };
   hitBody.userData.enemy = enemy;
   hitHead.userData.enemy = enemy;
@@ -1095,16 +1387,11 @@ function removeEnemy(enemy) {
     enemy.ring.geometry.dispose();
     enemy.ring.material.dispose();
   }
-  // every rig builds its own geometry and materials, so both have to go back.
-  // Sprites are the exception: three shares one global geometry across all of
-  // them, so disposing it would break every glow in the scene.
-  const rigMats = Object.values(enemy.rig.mats);
+  // Only materials are per-enemy now; every rig geometry is shared from the cache
+  // across all instances of the type, so disposing one would blank out the rest.
   enemy.group.traverse((o) => {
-    if (o.isSprite) { o.material.dispose(); return; }
-    if (o.geometry) o.geometry.dispose();
-    if (o.material && !rigMats.includes(o.material)) o.material.dispose();
+    if (o.material) o.material.dispose();
   });
-  for (const m of rigMats) m.dispose();
 
   const i = enemies.indexOf(enemy);
   if (i >= 0) enemies.splice(i, 1);
@@ -1171,19 +1458,36 @@ function updateEnemies(dt, time) {
     const vx = (_toPlayer.x * advance - _toPlayer.z * strafe) * def.speed + _sep.x * 4;
     const vz = (_toPlayer.z * advance + _toPlayer.x * strafe) * def.speed + _sep.z * 4;
 
-    e.group.position.x += vx * dt;
-    e.group.position.z += vz * dt;
-    e.group.position.x = clamp(e.group.position.x, -ARENA + 1, ARENA - 1);
-    e.group.position.z = clamp(e.group.position.z, -ARENA + 1, ARENA - 1);
-    resolveCollisions(e.group.position, def.radius, 0, def.height);
-    e.group.position.y = 0;                 // they walk the floor, they don't climb
+    const pos = e.group.position;
+    pos.x = clamp(pos.x + vx * dt, -ARENA + 1, ARENA - 1);
+    pos.z = clamp(pos.z + vz * dt, -ARENA + 1, ARENA - 1);
+
+    // Enemies get the same gravity and step assist as the player. Without it they
+    // are stuck on the floor and anyone standing on the central platform is safe
+    // from every melee type in the game.
+    e.velY -= GRAVITY * dt;
+    pos.y += e.velY * dt;
+    if (pos.y <= 0) { pos.y = 0; e.velY = 0; }
+
+    const wantX = pos.x, wantZ = pos.z;
+    if (resolveCollisions(pos, def.radius, 0, def.height) || pos.y <= 0) e.velY = 0;
+
+    if ((Math.abs(pos.x - wantX) > 1e-4 || Math.abs(pos.z - wantZ) > 1e-4) && e.velY <= 0 &&
+        tryStepUp(pos, def.radius, 0, def.height, wantX, wantZ, STEP_UP)) {
+      e.velY = 0;
+    }
 
     // the rig faces -Z, so this turns that face toward the player
     e.group.rotation.y = Math.atan2(-_toPlayer.x, -_toPlayer.z);
 
     const moveSpeed = Math.hypot(vx, vz);
     e.walkPhase += dt * (2.2 + moveSpeed * 1.1);
-    animateHumanoid(e.rig, e.walkPhase, clamp(moveSpeed / def.speed, 0.1, 1.2) * 0.7);
+    if (e.swing > 0) e.swing = Math.max(0, e.swing - dt);
+    animateHumanoid(
+      e.rig, e.walkPhase, clamp(moveSpeed / (def.speed || 1), 0.1, 1.1) * 0.42,
+      def.ranged ? 1.35 : 0,      // gunners hold the rifle up
+      e.swing                     // melee types chop when they connect
+    );
 
     if (e.flash > 0) {
       e.flash -= dt;
@@ -1195,21 +1499,19 @@ function updateEnemies(dt, time) {
     e.attackCd -= dt;
 
     if (def.ranged) {
-      // only shoot with a clear line, otherwise reposition
-      if (e.attackCd <= 0 && dist < 34 && player.alive) {
+      if (e.attackCd <= 0 && dist < 40 && player.alive) {
         e.attackCd = def.fireEvery * (0.75 + Math.random() * 0.5);
         fireEnemyShot(e);
       }
-      // positive pitch swings the hanging arm toward -Z, i.e. forward
-      e.rig.armR.rotation.x = 1.35;
-      e.rig.armL.rotation.x = 1.1;
-    } else if (dist < def.radius + 1.2 && e.attackCd <= 0 && player.alive) {
+    } else if (dist < def.radius + 1.2 && e.attackCd <= 0 && player.alive &&
+               Math.abs((player.pos.y - EYE_H) - pos.y) < def.height * 0.8) {
       e.attackCd = 0.9;
+      e.swing = 0.35;                       // drives the melee arc on the weapon arm
       damagePlayer(def.dmg);
-      e.group.position.x -= _toPlayer.x * 1.2;
-      e.group.position.z -= _toPlayer.z * 1.2;
+      pos.x -= _toPlayer.x * 1.2;
+      pos.z -= _toPlayer.z * 1.2;
       spawnParticles(
-        new THREE.Vector3(e.group.position.x, def.height * 0.6, e.group.position.z),
+        new THREE.Vector3(pos.x, pos.y + def.height * 0.6, pos.z),
         def.accent, 12, 4, 0.4
       );
     }
@@ -1238,7 +1540,9 @@ function fireEnemyShot(e) {
   if (!s) return;
 
   const origin = new THREE.Vector3(
-    e.group.position.x, e.def.height * 0.72, e.group.position.z
+    e.group.position.x,
+    e.group.position.y + e.def.height * 0.72,   // enemies can be up on a platform
+    e.group.position.z
   );
   // aim at the chest, not the eye, and let the shot be slow enough to sidestep
   _shotDir.set(
@@ -1289,7 +1593,7 @@ function updateShots(dt) {
 
 const pedestals = [];
 const PEDESTAL_SPOTS = [
-  [-19, -14], [21, -9], [-8, 20], [15, 18], [-24, 6], [4, -22],
+  [-30, -22], [32, -14], [-13, 33], [27, 29], [-38, 9], [7, -35], [40, 2], [-6, -12],
 ];
 
 function buildWeaponIcon(key) {
@@ -1590,7 +1894,8 @@ function damagePlayer(amount) {
   if (!player.alive) return;
   player.hp -= amount;
   hitFlashT = 0.35;
-  shake = Math.min(0.28, shake + 0.12);
+  // kept small on purpose: a big positional jolt reads as the view being yanked
+  shake = Math.min(0.10, shake + 0.045);
   Sfx.hurt();
   if (player.hp <= 0) {
     player.hp = 0;
@@ -1815,6 +2120,7 @@ function animate() {
 
 // stand the body at the spawn point so it isn't left at the origin behind the menu
 playerRig.root.position.set(player.pos.x, 0, player.pos.z);
+
 
 refreshGunModel();
 updateHUD();
